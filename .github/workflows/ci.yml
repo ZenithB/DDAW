@@ -1,0 +1,33 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-14   # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: brew install ninja
+      - name: Configure (core + tests; the JUCE app is built in a separate job)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDDAW_BUILD_APP=OFF
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Parity report (DDAW fixtures)
+        run: ./build/ddaw_parity tests/fixtures/ddaw --report build/parity-report.json
+      - uses: actions/upload-artifact@v4
+        with: { name: parity-report, path: build/parity-report.json }
+
+  app:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: brew install ninja
+      - name: Build the JUCE app
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDDAW_BUILD_TESTS=OFF
+          cmake --build build --target DDAW
