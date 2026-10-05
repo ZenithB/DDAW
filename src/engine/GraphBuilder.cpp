@@ -214,6 +214,7 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
         if (!bus) {
             s.inst = createInstrument(t.inst.type);
             if (s.inst) {
+                s.inst->bind(t.inst.uid, t.inst.plugin);
                 s.inst->prepare(sr, kMaxBlock);
                 applyParams(*s.inst, t.inst, where + " inst", issues, res, tid + "|inst|", idx, kSlotInst);
                 if (bank) {  // sample injection: the main sample into slot 0, drum pad overrides into slots 0-7
@@ -237,6 +238,7 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
             if (!f.on) continue;  // bypassed devices take no slot
             auto dev = createEffect(f.type);
             if (!dev) { issues.insert("effect: " + f.type); continue; }
+            dev->bind(f.uid, f.plugin);
             dev->prepare(sr, kMaxBlock);
             const uint8_t slot = static_cast<uint8_t>(kSlotFx0 + s.fx.size());
             applyParams(*dev, f, where + " fx " + f.type, issues, res, tid + "|" + fxIdOf(f) + "|", idx, slot);
@@ -476,6 +478,7 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
         if (!f.on) continue;
         auto dev = createEffect(f.type);
         if (!dev) { issues.insert("effect: " + f.type); continue; }
+        dev->bind(f.uid, f.plugin);
         dev->prepare(sr, kMaxBlock);
         FxSlot& slot = g.addMasterFx();
         const uint8_t slotIdx = static_cast<uint8_t>(kSlotFx0 + g.masterFxCount() - 1);

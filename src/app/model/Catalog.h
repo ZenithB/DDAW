@@ -6,7 +6,9 @@
 #include <string_view>
 #include <vector>
 
+#include "app/model/PluginProvider.h"
 #include "core/Device.h"
+#include "project/Project.h"
 
 namespace ddaw::app {
 
@@ -22,6 +24,12 @@ struct DeviceInfo {
 
 const std::vector<DeviceInfo>& deviceCatalog();
 const DeviceInfo* findDevice(Chain chain, std::string_view type);
+
+// Hosted plugins (L1): their parameters are not in the static catalog but in the live host. The app sets the provider once; the
+// two lookups below then work for every device, catalog or plugin. UI thread only.
+void setActivePluginProvider(PluginProvider* p);
+const DeviceInfo* deviceInfoFor(Chain chain, const project::DeviceSpec& d);       // null: unknown, or a plugin that is not loaded
+std::string paramLabelFor(const project::DeviceSpec& d, std::string_view key);     // the plugin's own parameter name, else paramLabel(key)
 
 // "lfoShape" -> "LFO Shape", "vibAmt" -> "Vib Amt": a readable label from a schema key.
 std::string paramLabel(std::string_view key);

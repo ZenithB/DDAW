@@ -12,7 +12,7 @@ const ParamSpec kDepthSpec{0, "depth", -1.0f, 1.0f, 0.5f, Curve::Linear, 0, fals
 // Does anything on the track accept audio-rate modulation?
 bool hasAudioRatePorts(const project::Track& t) {
     auto any = [](const project::DeviceSpec& d, app::Chain chain) {
-        const auto* info = app::findDevice(chain, d.type);
+        const auto* info = app::deviceInfoFor(chain, d);
         if (!info) return false;
         for (const auto& ps : info->params) if (ps.audioRate) return true;
         return false;

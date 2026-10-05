@@ -14,6 +14,7 @@
 #include "app/ui/MainComponent.h"
 #include "app/ui/MixerView.h"
 #include "app/ui/SessionView.h"
+#include "plugins/PluginHost.h"
 
 using namespace ddaw;
 namespace edit = ddaw::app::edit;
@@ -27,7 +28,7 @@ std::unique_ptr<juce::ScopedJuceInitialiser_GUI> gGui;
 struct GuiListener : Catch::EventListenerBase {
     using EventListenerBase::EventListenerBase;
     void testRunStarting(const Catch::TestRunInfo&) override { gGui = std::make_unique<juce::ScopedJuceInitialiser_GUI>(); }
-    void testRunEnded(const Catch::TestRunStats&) override { gGui.reset(); }
+    void testRunEnded(const Catch::TestRunStats&) override { ddaw::plugins::PluginHost::shutdown(); gGui.reset(); }
 };
 CATCH_REGISTER_LISTENER(GuiListener)
 void gui() {}

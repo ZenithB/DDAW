@@ -22,7 +22,7 @@ endif()
 target_include_directories(ddaw_ui PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(ddaw_ui PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(ddaw_ui
-    PUBLIC  ddaw_appmodel juce::juce_gui_basics juce::juce_graphics juce::juce_events juce::juce_core juce::juce_audio_formats juce::juce_audio_devices
+    PUBLIC  ddaw_appmodel ddaw_plugins juce::juce_gui_basics juce::juce_graphics juce::juce_events juce::juce_core juce::juce_audio_formats juce::juce_audio_devices
     PRIVATE juce::juce_recommended_config_flags)
 
 # Headless UI snapshots: renders the window (and each view) to PNG without showing it.
@@ -53,6 +53,7 @@ endif()
 
 target_link_libraries(DDAW PRIVATE
     ddaw_audiohost
+    ddaw_plugins
     ddaw_ui
     juce::juce_audio_formats
     juce::juce_audio_utils

@@ -7,6 +7,7 @@
 #include "app/model/Catalog.h"
 #include "devices/Registry.h"
 #include "app/model/Edit.h"
+#include "FakePluginProvider.h"
 
 using namespace ddaw;
 using namespace ddaw::app;
@@ -764,4 +765,82 @@ TEST_CASE("polyphonic audio input: the model switches it on and off, and recordi
     m.setPolyInput(false);
     CHECK_FALSE(m.polyInput());
     CHECK_FALSE(eng.polyInputEnabled());
+}
+
+// ---- hosted plugins: the model's side, against a fake host ----
+
+
+TEST_CASE("plugins (model): a plugin device is loaded when it is added, reported once if it cannot be, and described by its host", "[appmodel][plugins]") {
+    Rig r;
+    auto& m = *r.m;
+    ddaw::testing::FakeProvider host;
+    m.setPluginProvider(&host);
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
+    const auto track = m.project().tracks[0].uid;
+    REQUIRE(m.apply(edit::addPluginEffect(m.project(), track, "fx", "AudioUnit#x#Fake", "Fake")));
+    REQUIRE(m.project().tracks[0].fx.size() == 1);
+    const auto& d = m.project().tracks[0].fx[0];
+    CHECK(d.type == "plugin");
+    CHECK(d.plugin == "AudioUnit#x#Fake");
+    CHECK(d.pluginName == "Fake");
+    CHECK(host.live(d.uid));
+    CHECK(host.ensureCalls == 1);
+    // later edits do not ask again
+    m.apply(edit::addScene(m.project()));
+    CHECK(host.ensureCalls == 1);
+    // the UI sees the plugin's parameters and names
+    const auto* info = m.deviceInfo(app::Chain::Effect, d);
+    REQUIRE(info);
+    CHECK(info->params.size() == 2);
+    CHECK(info->label == "Fake");
+    CHECK(m.paramLabel(d, "p_cutoff") == "Cutoff Freq");
+    CHECK(m.paramLabel(d, "p_res") == "Resonance");
+    CHECK(m.paramLabel(project::DeviceSpec{}, "lfoShape") == "LFO Shape");
+    // an instrument plugin that will not load: said once, and not retried on every edit
+    host.unloadable.insert("AudioUnit#x#Gone");
+    REQUIRE(m.apply(edit::setPluginInstrument(track, "AudioUnit#x#Gone", "Gone")));
+    CHECK(m.status().find("Gone") != std::string::npos);
+    CHECK(m.status().find("cannot load") != std::string::npos);
+    const int calls = host.ensureCalls;
+    m.apply(edit::addScene(m.project()));
+    m.apply(edit::addScene(m.project()));
+    CHECK(host.ensureCalls == calls);
+    CHECK(m.deviceInfo(app::Chain::Instrument, m.project().tracks[0].inst) == nullptr);   // not live: no panel content
+}
+
+TEST_CASE("plugins (model): a plugin's state is saved with the project, and loaded back into the plugin", "[appmodel][plugins]") {
+    namespace fs = std::filesystem;
+    const auto dir = (fs::temp_directory_path() / "ddaw_plugin_state_test.ddaw").string();
+    fs::remove_all(dir);
+    Rig r;
+    auto& m = *r.m;
+    ddaw::testing::FakeProvider host;
+    m.setPluginProvider(&host);
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
+    const auto track = m.project().tracks[0].uid;
+    m.apply(edit::addPluginEffect(m.project(), track, "fx", "AudioUnit#x#Fake", "Fake"));
+    const auto uid = m.project().tracks[0].fx[0].uid;
+    host.states[uid] = "c3RhdGUtYmxvYg==";                          // what the plugin's own editor produced
+    CHECK(m.project().tracks[0].fx[0].pluginState.empty());
+    const bool couldUndo = m.canUndo();
+    const auto undoDepth = m.document().revision();
+    std::string err;
+    REQUIRE(m.save(dir, err));                                      // saving flushes it into the document ...
+    CHECK(m.project().tracks[0].fx[0].pluginState == "c3RhdGUtYmxvYg==");
+    CHECK(m.canUndo() == couldUndo);                                // ... without making an undo step of it
+    (void)undoDepth;
+    CHECK_FALSE(m.dirty());
+    // reopen: the plugin is created again with that state, before the first build
+    host.liveIds.clear(); host.states.clear();
+    m.newProject();
+    CHECK(host.liveIds.empty());
+    REQUIRE(m.open(dir, err));
+    REQUIRE(m.project().tracks[0].fx.size() == 1);
+    const auto reopened = m.project().tracks[0].fx[0].uid;
+    CHECK(host.live(reopened));
+    CHECK(host.states[reopened] == "c3RhdGUtYmxvYg==");
+    // opening another project drops the instances the new one does not use
+    m.newProject();
+    CHECK(host.liveIds.empty());
+    fs::remove_all(dir);
 }

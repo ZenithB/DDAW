@@ -11,7 +11,9 @@
 #include <string>
 #include <vector>
 
+#include "app/model/Catalog.h"
 #include "app/model/Edit.h"
+#include "app/model/PluginProvider.h"
 #include "app/model/Recording.h"
 #include "engine/PolyInput.h"
 #include "document/Document.h"
@@ -171,6 +173,19 @@ public:
     const std::string& status() const { return status_; }
     void setStatus(const std::string& s) { status_ = s; }
 
+    // ---- hosted plugins (L1) ----
+    // The host lives with the UI; the model asks it for the live instance behind each "plugin" device. Every edit, undo, redo and
+    // project load makes sure the instances exist (and rebuilds the graph when one has just come alive); a plugin that cannot
+    // be loaded is reported once and its device passes audio through.
+    void setPluginProvider(PluginProvider* p);
+    PluginProvider* pluginProvider() const { return plugins_; }
+    void syncPlugins();
+    // Copy each plugin's current state into the document (so saving keeps what its own editor changed). Not an undo step.
+    void flushPluginStates();
+    // The parameters and label of a device: the catalog entry, or for a hosted plugin its live parameter list.
+    const DeviceInfo* deviceInfo(Chain chain, const project::DeviceSpec& d);
+    std::string paramLabel(const project::DeviceSpec& d, std::string_view key) const;
+
     // ---- change notification ----
     using Listener = std::function<void(ModelEvent)>;
     int addListener(Listener l);
@@ -188,6 +203,10 @@ private:
     std::map<std::string, double> learnBase_;   // each source's first value while learning
     void replaceDocument(project::Project p, project::Uid nextUid);
     void fixSelection();
+
+    bool syncPluginsNoRebuild();
+    PluginProvider* plugins_ = nullptr;
+    std::set<std::string> pluginFailed_;                       // "uid|id" of plugins that failed to load (reported once)
 
     engine::Engine& engine_;
     engine::GraphService svc_;

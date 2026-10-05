@@ -36,6 +36,9 @@
 #ifdef DDAW_SOAK_DDSP
 #include "ddsp/DdspInstrument.h"
 #endif
+#ifdef DDAW_SOAK_PLUGINS
+#include "plugins/PluginProvider.h"
+#endif
 #include "project/ProjectJson.h"
 #include "project/SampleBank.h"
 
@@ -94,6 +97,8 @@ int main(int argc, char** argv) {
     bool realtime = false;
     uint32_t seed = 12345;
     std::string report;
+    uint64_t pluginEdits = 0;   // accepted hosted-plugin edits
+    bool hostPlugins = false;   // --plugins: real AudioUnits (Apple's AUDelay and DLSMusicDevice) join the rotation
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&] { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -103,6 +108,7 @@ int main(int argc, char** argv) {
         else if (a == "--realtime") realtime = true;
         else if (a == "--seed") seed = uint32_t(std::atol(next().c_str()));
         else if (a == "--report") report = next();
+        else if (a == "--plugins") hostPlugins = true;
     }
 #ifndef NDEBUG
     std::printf("NOTE: this is an unoptimised (Debug) build. Timings are meaningless and are not checked; use a Release build for the budget checks.\n");
@@ -113,9 +119,41 @@ int main(int argc, char** argv) {
     const uint64_t totalFrames = uint64_t(minutes * 60.0 * sr);
     const double periodUs = 1e6 * block / sr;
 
+#ifdef DDAW_SOAK_PLUGINS
+    // Hosted plugins allocate on the audio thread (that is theirs to do): with --plugins the allocation check is off. The host
+    // must be released on this thread after everything that holds a plugin has gone, hence the guard first.
+    struct HostGuard { ~HostGuard() { plugins::PluginHost::shutdown(); } } hostGuard;
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    if (hostPlugins) plugins::registerDevices();
+#endif
     engine::Engine eng;
     eng.prepare(sr);
     app::AppModel model(eng, sr);
+#ifdef DDAW_SOAK_PLUGINS
+    std::unique_ptr<plugins::JucePluginProvider> provider;
+    std::string delayId, dlsId;
+    if (hostPlugins) {
+        provider = std::make_unique<plugins::JucePluginProvider>(juce::File(), sr);
+        model.setPluginProvider(provider.get());
+        auto find = [](const char* type, const char* sub) -> std::string {
+            auto& pm = plugins::PluginHost::instance();
+            for (int f = 0; f < pm.formats().getNumFormats(); ++f) {
+                auto* fmt = pm.formats().getFormat(f);
+                if (fmt->getName() != "AudioUnit") continue;
+                for (const auto& path : fmt->searchPathsForPlugins(juce::FileSearchPath(), true, false)) {
+                    if (!path.contains(juce::String(type) + "," + sub + ",appl")) continue;
+                    juce::OwnedArray<juce::PluginDescription> types;
+                    fmt->findAllTypesForFile(types, path);
+                    if (types.size() > 0) return plugins::PluginHost::makeId(*types[0]);
+                }
+            }
+            return {};
+        };
+        delayId = find("aufx", "dely");
+        dlsId = find("aumu", "dls ");
+        if (delayId.empty() || dlsId.empty()) { std::printf("FAIL: --plugins needs Apple's AUDelay and DLSMusicDevice\n"); return 1; }
+    }
+#endif
     // the audio thread comes first: the builder waits for the engine to swap each graph in
     Stats st;
     std::atomic<bool> run{true};
@@ -211,7 +249,7 @@ int main(int argc, char** argv) {
         const auto& p = model.project();
         const size_t nT = p.tracks.size();
         bool ok = true;
-        switch (rng() % 27) {
+        switch (rng() % (hostPlugins ? 29u : 27u)) {
             case 0: if (!p.scenes.empty()) model.launchScene(p.scenes[pick(p.scenes.size())]); break;
             case 1: model.stopAllClips(); break;
             case 2: arrMode = !arrMode; model.play(arrMode, 0.0); break;
@@ -297,6 +335,23 @@ int main(int argc, char** argv) {
                 break;
             }
             case 26: model.allNotesOff(); model.bend(0.0f); break;
+#ifdef DDAW_SOAK_PLUGINS
+            case 27: if (nT) {   // a hosted effect on a random track: add one, or remove the one that is there
+                const auto& t = p.tracks[pick(nT)];
+                if (t.kind == project::TrackKind::Bus) break;
+                const project::DeviceSpec* has = nullptr;
+                for (auto& f : t.fx) if (f.type == "plugin") has = &f;
+                if (has) ok = model.apply(app::edit::removeDevice(has->uid));
+                else if (t.fx.size() < 5) ok = model.apply(app::edit::addPluginEffect(p, t.uid, "fx", delayId, "AUDelay"));
+                if (ok) ++pluginEdits;
+            } break;
+            case 28: if (nT) {   // a hosted instrument on a random synth track, or back to the poly synth
+                const auto& t = p.tracks[pick(nT)];
+                if (t.kind != project::TrackKind::Synth) break;
+                ok = model.apply(t.inst.type == "plugin" ? app::edit::setInstrument(p, t.uid, "poly") : app::edit::setPluginInstrument(t.uid, dlsId, "DLSMusicDevice"));
+                if (ok) ++pluginEdits;
+            } break;
+#endif
             case 22: if (nT) {   // retune or remove a route (live fields do not rebuild the graph)
                 const auto& t = p.tracks[pick(nT)];
                 if (!t.arate.empty()) {
@@ -365,7 +420,8 @@ int main(int argc, char** argv) {
                 double(rssWarm) / 1048576.0, double(rssPeak) / 1048576.0, double(rssEnd) / 1048576.0, growthMB, backlog);
 
     std::vector<std::string> fails;
-    if (st.allocs.load()) fails.push_back("allocation on the audio thread");
+    if (hostPlugins) std::printf("hosted plugins: %llu edits (AUDelay effects and the DLS instrument added and removed)\n", (unsigned long long)pluginEdits);
+    if (st.allocs.load() && !hostPlugins) fails.push_back("allocation on the audio thread");
     if (st.nanBlocks.load()) fails.push_back("NaN or inf in the output");
     if (st.overFull.load()) fails.push_back("output above full scale");
     if (svc.failures) fails.push_back("failed graph builds: " + svc.lastError);

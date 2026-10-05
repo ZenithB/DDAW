@@ -65,6 +65,9 @@ DeviceSpec device(const json& j) {
     };
     d.padSamples = strMap("padSamples");
     d.padNames = strMap("padNames");
+    d.plugin = get<std::string>(j, "plugin", "");
+    d.pluginName = get<std::string>(j, "pluginName", "");
+    d.pluginState = get<std::string>(j, "pluginState", "");
     return d;
 }
 

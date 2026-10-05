@@ -5,6 +5,7 @@
 #include "app/AudioHost.h"
 #include "app/model/Demo.h"
 #include "app/model/Settings.h"
+#include "plugins/PluginProvider.h"
 #ifdef DDAW_HAVE_DDSP
 #include "ddsp/DdspInstrument.h"
 #endif
@@ -55,8 +56,12 @@ public:
             juce::Logger::writeToLog("audio: " + err);
             host_->engine().prepare(sr);
         } else if (host_->stats().sampleRate > 0) sr = host_->stats().sampleRate;
+        plugins::registerDevices();   // hosted VST3 / AudioUnit plugins: the "plugin" instrument and effect
         model_ = std::make_unique<app::AppModel>(host_->engine(), sr);
         wireRecording();
+        plugins_ = std::make_unique<plugins::JucePluginProvider>(
+            juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("DDAW").getChildFile("plugins.xml"), sr);
+        model_->setPluginProvider(plugins_.get());   // before the project opens: its plugins are loaded ahead of the first build
         const auto path = args.unquoted().trim();
         std::string err;
         if (path.isNotEmpty() && juce::File(path).exists()) { if (!model_->open(path.toStdString(), err)) juce::Logger::writeToLog("open: " + juce::String(err)); }
@@ -68,11 +73,15 @@ public:
         window_.reset();
         host_->stop();
         model_.reset();
+        if (plugins_) plugins_->closeEditors();
+        plugins_.reset();
+        plugins::PluginHost::shutdown();   // every plugin is released here, on the message thread
         host_.reset();
     }
     void systemRequestedQuit() override { quit(); }
 
 private:
+    std::unique_ptr<plugins::JucePluginProvider> plugins_;
     juce::String settingsPath() const {
         return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("DDAW").getChildFile("settings.json").getFullPathName();
     }

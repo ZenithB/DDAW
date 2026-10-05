@@ -6,6 +6,7 @@ namespace ddaw::ui {
 
 namespace {
 constexpr int kKnobW = 58, kKnobH = 80, kPanelHeader = 26, kPad = 8, kTopH = 30;
+constexpr size_t kMaxPluginKnobs = 24;   // a plugin can have hundreds of parameters: the panel shows the first few, its editor has them all
 }
 
 // One device: header (name, on, move, remove), knobs for every parameter, and the special controls the
@@ -15,10 +16,11 @@ public:
     Panel(app::AppModel& m, const project::DeviceSpec& d, app::Chain chain, bool master, size_t slot, size_t slots, int availH)
         : model_(m), uid_(d.uid), chain_(chain), master_(master), slot_(slot), slots_(slots), type_(d.type),
           power_("", col::play), left_("<"), right_(">"), close_("x") {
-        info_ = app::findDevice(chain, d.type);
-        label_ = info_ ? info_->label : d.type;
+        info_ = app::deviceInfoFor(chain, d);
+        plugin_ = d.type == "plugin";
+        label_ = info_ ? info_->label : (plugin_ ? (d.pluginName.empty() ? juce::String("Plugin") : juce::String(d.pluginName)) : d.type);
         const int rows = std::max(1, (availH - kPanelHeader - kPad - (special() ? 26 : 0)) / kKnobH);
-        const size_t n = info_ ? info_->params.size() : 0;
+        const size_t n = info_ ? (plugin_ ? std::min(info_->params.size(), kMaxPluginKnobs) : info_->params.size()) : 0;
         const int cols = n ? int((n + size_t(rows) - 1) / size_t(rows)) : 0;
         width_ = std::max(150, cols * kKnobW + 2 * kPad);
         if (chain != app::Chain::Instrument) { for (juce::Component* c : std::initializer_list<juce::Component*>{&power_, &left_, &right_, &close_}) addAndMakeVisible(c); }
@@ -28,31 +30,49 @@ public:
         left_.onClick = [this] { move(-1); };
         right_.onClick = [this] { move(+1); };
         if (info_) {
-            for (size_t i = 0; i < info_->params.size(); ++i) {
+            for (size_t i = 0; i < n; ++i) {
                 const auto& spec = info_->params[i];
-                auto k = std::make_unique<Knob>(spec, app::paramLabel(spec.key), spec.audioRate ? col::meterMid : accent());   // audio-rate ports stand out
+                auto k = std::make_unique<Knob>(spec, app::paramLabelFor(d, spec.key), spec.audioRate ? col::meterMid : accent());   // audio-rate ports stand out
                 const int r = int(i) % rows, c = int(i) / rows;
                 k->setBounds(kPad + c * kKnobW, kPanelHeader + 4 + r * kKnobH, kKnobW, kKnobH);
                 const std::string key = spec.key;
-                k->onBegin = [this] { model_.beginGesture("parameter"); };
-                k->onChange = [this, key](double v) { model_.apply(document::cmd::setParam(uid_, key, v)); };
-                k->onEnd = [this] { model_.endGesture(); };
+                if (plugin_) {   // a plugin keeps its own values (and saves them in its state): the knob drives it directly
+                    k->onChange = [this, i](double v) { if (auto* pp = model_.pluginProvider()) pp->setValue(uid_, i, float(v)); };
+                } else {
+                    k->onBegin = [this] { model_.beginGesture("parameter"); };
+                    k->onChange = [this, key](double v) { model_.apply(document::cmd::setParam(uid_, key, v)); };
+                    k->onEnd = [this] { model_.endGesture(); };
+                }
                 addAndMakeVisible(*k);
                 knobs_.push_back(std::move(k));
             }
         }
         if (special()) {
-            extra_ = std::make_unique<Chip>(type_ == "duck" ? "Source: ..." : type_ == "drum" ? "Pad samples..." : "Load sample...");
-            extra_->onClick = [this] { type_ == "duck" ? pickSource() : type_ == "drum" ? pickPadSamples() : pickSample(); };
+            extra_ = std::make_unique<Chip>(plugin_ ? "Open editor" : type_ == "duck" ? "Source: ..." : type_ == "drum" ? "Pad samples..." : "Load sample...");
+            extra_->onClick = [this] { plugin_ ? openEditor() : type_ == "duck" ? pickSource() : type_ == "drum" ? pickPadSamples() : pickSample(); };
             addAndMakeVisible(*extra_);
         }
         sync(d);
     }
     int width() const { return width_; }
     project::Uid uid() const { return uid_; }
+    // A plugin's values can change under us (its own editor, automation): follow them.
+    void refreshLive() {
+        auto* pp = model_.pluginProvider();
+        if (!plugin_ || !pp || !info_) return;
+        for (size_t i = 0; i < knobs_.size(); ++i) {
+            const double v = double(pp->value(uid_, i));
+            if (std::abs(v - knobs_[i]->value()) > 1e-4) knobs_[i]->setValue(v);
+        }
+    }
     void sync(const project::DeviceSpec& d) {
         if (info_)
             for (size_t i = 0; i < knobs_.size(); ++i) {
+                if (plugin_) {
+                    knobs_[i]->setStored(false);
+                    if (auto* pp = model_.pluginProvider()) knobs_[i]->setValue(double(pp->value(uid_, i)));
+                    continue;
+                }
                 auto it = d.params.find(info_->params[i].key);
                 knobs_[i]->setStored(it != d.params.end());
                 knobs_[i]->setValue(it != d.params.end() ? it->second : double(info_->params[i].def));
@@ -65,6 +85,8 @@ public:
                 extra_->setText(juce::String("Source: ") + (t ? juce::String(t->name) : juce::String("none")));
             } else if (type_ == "drum") {
                 extra_->setText(d.padSamples.empty() ? juce::String("Pad samples...") : juce::String(int(d.padSamples.size())) + " pad sample(s)");
+            } else if (plugin_) {
+                extra_->setText("Open editor");
             } else extra_->setText(d.sampleId.empty() ? juce::String("Load sample...") : juce::String(d.sampleName.empty() ? d.sampleId : d.sampleName));
         }
         selected_ = model_.selection().device == uid_;
@@ -93,14 +115,14 @@ public:
         if (!info_ || info_->params.empty()) {
             g.setColour(col::faint);
             g.setFont(uiFont(11.5f));
-            g.drawText(info_ ? "no parameters" : "unknown device", juce::Rectangle<int>(0, kPanelHeader, getWidth(), getHeight() - kPanelHeader - 28), juce::Justification::centred);
+            g.drawText(info_ ? "no parameters" : plugin_ ? "plugin not loaded" : "unknown device", juce::Rectangle<int>(0, kPanelHeader, getWidth(), getHeight() - kPanelHeader - 28), juce::Justification::centred);
         }
         if (!on_) { g.setColour(col::black.withAlpha(0.35f)); g.fillRoundedRectangle(r, 5.0f); }
     }
     void mouseDown(const juce::MouseEvent&) override { model_.selectDevice(uid_); }
 
 private:
-    bool special() const { return type_ == "duck" || type_ == "drum" || type_ == "sampler" || type_ == "ksampler" || type_ == "granular"; }
+    bool special() const { return plugin_ || type_ == "duck" || type_ == "drum" || type_ == "sampler" || type_ == "ksampler" || type_ == "granular"; }
     juce::Colour accent() const { return chain_ == app::Chain::Instrument ? col::accent : chain_ == app::Chain::MidiFx ? col::meterMid : juce::Colour(0xff5aa9e6); }
     void move(int delta) {
         const auto& p = model_.project();
@@ -116,6 +138,9 @@ private:
         document::Command ins{"device.insert", {{"chain", master_ ? "master" : chain_ == app::Chain::MidiFx ? "midifx" : "fx"}, {"index", to}, {"device", project::deviceToJson(*d)}}};
         if (tr) ins.args["track"] = tr->uid;
         model_.applyGroup("move device", {app::edit::removeDevice(uid_), ins});
+    }
+    void openEditor() {
+        if (auto* pp = model_.pluginProvider()) pp->showEditor(uid_, [this] { model_.flushPluginStates(); });
     }
     void pickSource() {
         juce::PopupMenu m;
@@ -205,6 +230,7 @@ private:
     bool master_, on_ = true, selected_ = false;
     size_t slot_, slots_;
     std::string type_;
+    bool plugin_ = false;
     const app::DeviceInfo* info_ = nullptr;
     juce::String label_;
     int width_ = 150;
@@ -233,9 +259,22 @@ DeviceChainView::DeviceChainView(app::AppModel& m) : View(m) {
             types.push_back(d.type);
         }
         menu.addSubMenu(lastCat, sub);
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addFx_), [this, types](int r) {
-            if (r < 1 || size_t(r) > types.size()) return;
+        // hosted effect plugins, from the last scan
+        auto plugs = std::make_shared<std::vector<app::PluginEntry>>();
+        if (auto* pp = model.pluginProvider()) for (auto& e : pp->available()) if (!e.instrument) plugs->push_back(e);
+        if (!plugs->empty()) {
+            juce::PopupMenu pm;
+            for (size_t i = 0; i < plugs->size(); ++i) pm.addItem(int(1000 + i), juce::String((*plugs)[i].name) + (  (*plugs)[i].vendor.empty() ? "" : "  (" + juce::String((*plugs)[i].vendor) + ")"));
+            menu.addSubMenu("Plugins", pm);
+        }
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addFx_), [this, types, plugs](int r) {
             const auto& p = model.project();
+            if (r >= 1000 && size_t(r - 1000) < plugs->size()) {
+                const auto& e = (*plugs)[size_t(r - 1000)];
+                model.apply(app::edit::addPluginEffect(p, model.selection().track, showingMaster() ? "master" : "fx", e.id, e.name));
+                return;
+            }
+            if (r < 1 || size_t(r) > types.size()) return;
             model.apply(app::edit::addDevice(p, model.selection().track, showingMaster() ? "master" : "fx", types[size_t(r - 1)]));
         });
     };
@@ -255,7 +294,8 @@ juce::String DeviceChainView::signature() const {
     const auto& p = model.project();
     juce::String s = master_.isOn() ? "M" : "T" + juce::String(juce::int64(model.selection().track));
     s << "h" << getHeight();
-    auto add = [&](const project::DeviceSpec& d) { s << "|" << juce::String(juce::int64(d.uid)) << d.type; };
+    auto* pp = model.pluginProvider();
+    auto add = [&](const project::DeviceSpec& d) { s << "|" << juce::String(juce::int64(d.uid)) << d.type << ((d.type == "plugin" && pp && pp->live(d.uid)) ? "L" : ""); };
     if (master_.isOn()) for (auto& d : p.masterFx) add(d);
     else if (const auto* t = app::edit::findTrack(p, model.selection().track)) {
         for (auto& d : t->midifx) add(d);
@@ -272,6 +312,10 @@ void DeviceChainView::refresh(app::ModelEvent) {
     for (auto& panel : panels_)
         if (const auto* d = model.document().findDevice(panel->uid())) panel->sync(*d);
     (void)p;
+}
+
+void DeviceChainView::tick() {
+    for (auto& panel : panels_) panel->refreshLive();
 }
 
 void DeviceChainView::rebuild() {

@@ -43,6 +43,18 @@ void BrowserPanel::rebuild() {
     section("Instruments", app::Chain::Instrument);
     section("Effects", app::Chain::Effect);
     section("MIDI Effects", app::Chain::MidiFx);
+    // hosted plugins (L1): from the last scan, with a row that scans again
+    if (auto* pp = model.pluginProvider()) {
+        Row h; h.kind = Row::Header; h.label = "Plugins"; h.open = !closed_.count("Plugins") || q.isNotEmpty();
+        std::vector<Row> body;
+        if (q.isEmpty()) { Row s; s.kind = Row::Scan; s.label = "Scan for plugins..."; body.push_back(s); }
+        for (const auto& e : pp->available()) {
+            if (q.isNotEmpty() && !juce::String(e.name).toLowerCase().contains(q) && !juce::String(e.vendor).toLowerCase().contains(q)) continue;
+            Row r; r.kind = Row::Plugin; r.label = juce::String(e.name) + (e.vendor.empty() ? "" : "  -  " + juce::String(e.vendor)); r.chain = e.instrument ? app::Chain::Instrument : app::Chain::Effect; r.key = e.id;
+            body.push_back(r);
+        }
+        if (!body.empty()) { rows_.push_back(h); if (h.open) rows_.insert(rows_.end(), body.begin(), body.end()); }
+    }
     // samples
     {
         Row h; h.kind = Row::Header; h.label = "Samples"; h.open = !closed_.count("Samples");
@@ -78,7 +90,7 @@ void BrowserPanel::paint(juce::Graphics& g) {
             g.drawText(juce::String(r.open ? juce::CharPointer_UTF8("\xe2\x96\xbe  ") : juce::CharPointer_UTF8("\xe2\x96\xb8  ")) + r.label.toUpperCase(), rr.reduced(8, 0), juce::Justification::centredLeft);
         } else {
             if (int(i) == pressed_) { g.setColour(col::raised); g.fillRect(rr); }
-            g.setColour(r.kind == Row::Import ? col::accent : col::text);
+            g.setColour(r.kind == Row::Import || r.kind == Row::Scan ? col::accent : col::text);
             g.setFont(uiFont(12.5f));
             g.drawText(r.label, rr.withTrimmedLeft(22).withTrimmedRight(6), juce::Justification::centredLeft, true);
         }
@@ -97,6 +109,9 @@ void BrowserPanel::mouseDown(const juce::MouseEvent& e) {
         pressed_ = -1;
     } else if (r.kind == Row::Import) {
         if (onImportSample) onImportSample();
+    } else if (r.kind == Row::Scan) {
+        if (onScanPlugins) onScanPlugins();
+        else if (auto* pp = model.pluginProvider()) { pp->scan({}); rebuild(); }
     }
     repaint();
 }
@@ -134,6 +149,15 @@ bool BrowserPanel::activate(const Row& r) {
         }
         if (!track) return false;
         return model.apply(app::edit::addDevice(p, track->uid, r.chain == app::Chain::MidiFx ? "midifx" : "fx", r.key));
+    }
+    if (r.kind == Row::Plugin) {
+        if (!track) return false;
+        const auto name = r.key.substr(r.key.rfind('#') + 1);
+        if (r.chain == app::Chain::Instrument) {
+            if (track->kind == project::TrackKind::Audio) return false;
+            return model.apply(app::edit::setPluginInstrument(track->uid, r.key, name));
+        }
+        return model.apply(app::edit::addPluginEffect(p, track->uid, "fx", r.key, name));
     }
     if (r.kind == Row::Sample) {
         if (!track) return false;

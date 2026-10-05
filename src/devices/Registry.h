@@ -17,6 +17,8 @@ std::unique_ptr<InstrumentDevice> createInstrument(std::string_view type);  // n
 using InstrumentFactory = std::unique_ptr<InstrumentDevice> (*)();
 void registerInstrument(std::string_view type, InstrumentFactory f);
 bool instrumentRegistered(std::string_view type);
+using EffectFactory = std::unique_ptr<EffectDevice> (*)();
+void registerEffect(std::string_view type, EffectFactory f);
 
 // Index of the ParamSpec with this key, or -1.
 int findParam(std::span<const ParamSpec> specs, std::string_view key);

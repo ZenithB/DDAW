@@ -34,6 +34,9 @@ json deviceJson(const DeviceSpec& d, bool isInst = false) {
     if (!d.sampleName.empty()) j["sampleName"] = d.sampleName;
     if (!d.padSamples.empty()) j["padSamples"] = strMapJson(d.padSamples);
     if (!d.padNames.empty()) j["padNames"] = strMapJson(d.padNames);
+    if (!d.plugin.empty()) j["plugin"] = d.plugin;
+    if (!d.pluginName.empty()) j["pluginName"] = d.pluginName;
+    if (!d.pluginState.empty()) j["pluginState"] = d.pluginState;
     return j;
 }
 

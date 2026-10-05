@@ -6,6 +6,7 @@
 #include "core/Sample.h"
 #include <memory>
 #include <span>
+#include <string_view>
 
 namespace ddaw {
 
@@ -31,6 +32,8 @@ struct ProcessContext {
     uint8_t tsTop, tsBottom;
     bool    arrangement = false;  // arrangement mode (else session)
     bool    offline = false;      // an offline render: devices with background threads may wait for them
+    bool    warmup = false;       // the builder is touching the graph's memory before it goes live: devices that share state
+                                  // with the running graph (hosted plugins) must not process
 };
 
 struct ModInputs {
@@ -61,6 +64,9 @@ public:
     virtual void  trigger() noexcept {}
     // The project routed a source track to this device (duck's `srcTrack`): switch to sidechain mode.
     virtual void  setSidechain(bool) noexcept {}
+    // Control path (builder thread, before prepare): the device's project identity - its uid and, for a hosted plugin, which
+    // plugin it is (DeviceSpec::plugin). Devices that need neither ignore it.
+    virtual void  bind(uint64_t /*deviceUid*/, std::string_view /*pluginId*/) {}
 };
 
 class InstrumentDevice {
@@ -78,6 +84,8 @@ public:
     // Control path (builder thread, before the graph is published): inject a decoded sample. Slot 0 is
     // the instrument's main sample; drum pads use slots 0-7. Non-sampled instruments ignore it.
     virtual void setSample(uint32_t /*slot*/, SamplePtr /*buf*/) {}
+    // Control path (builder thread, before prepare): the device's project identity, as for effects.
+    virtual void bind(uint64_t /*deviceUid*/, std::string_view /*pluginId*/) {}
     // ADDITIVE: mix into l/r.
     virtual void process(float* l, float* r, int numFrames,
                          const ProcessContext&, const ModInputs&) = 0;

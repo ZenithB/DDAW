@@ -110,6 +110,24 @@ Command setInstrument(const Project& p, Uid track, const std::string& type) {
     return {"inst.set", {{"track", track}, {"device", project::deviceToJson(d, true)}}};
 }
 
+Command setPluginInstrument(Uid track, const std::string& pluginId, const std::string& name) {
+    project::DeviceSpec d;
+    d.type = "plugin";
+    d.id = "inst";
+    d.plugin = pluginId;
+    d.pluginName = name;
+    return {"inst.set", {{"track", track}, {"device", project::deviceToJson(d, true)}}};
+}
+
+Command addPluginEffect(const Project& p, Uid track, const std::string& chain, const std::string& pluginId, const std::string& name) {
+    auto c = addDevice(p, track, chain, "plugin");
+    auto d = c.args["device"];
+    d["plugin"] = pluginId;
+    d["pluginName"] = name;
+    c.args["device"] = d;
+    return c;
+}
+
 Command newSessionClip(Uid track, const std::string& scene, double len) {
     project::Clip c;
     c.len = len;

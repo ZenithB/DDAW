@@ -62,6 +62,9 @@ struct DeviceSpec {
     // Instruments only: the sample bank ids (sampler, ksampler, granular; drum pad overrides by slot).
     std::string sampleId, sampleName;
     std::map<std::string, std::string> padSamples, padNames;
+    // Hosted plugin (type "plugin"): the identifier the host finds it by (format, name, vendor, unique id), its display name and
+    // its saved state (base64 of the plugin's own state blob). The state is the plugin's, opaque to the project.
+    std::string plugin, pluginName, pluginState;
 };
 
 struct ModTarget { std::string dest, fxId, pkey; };

@@ -44,6 +44,7 @@ public:
     void saveAs(std::function<void()> then = {});
     void exportAudio();
     void importSample();
+    void scanPlugins();
     void audioSettings();
 
 private:

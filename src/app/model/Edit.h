@@ -44,6 +44,9 @@ Command removeScene(const std::string& sceneId);
 Command addDevice(const Project& p, Uid track, const std::string& chain, const std::string& type, int index = -1);
 Command removeDevice(Uid device);
 Command setInstrument(const Project& p, Uid track, const std::string& type);
+// A hosted plugin as a track's instrument / as an effect (chain "fx" on a track, "master" on the master bus).
+Command setPluginInstrument(Uid track, const std::string& pluginId, const std::string& name);
+Command addPluginEffect(const Project& p, Uid track, const std::string& chain, const std::string& pluginId, const std::string& name);
 
 // ---- clips and notes ----
 Command newSessionClip(Uid track, const std::string& scene, double lenTicks = kBarTicks);

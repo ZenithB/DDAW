@@ -37,6 +37,7 @@ bool AppModel::apply(const document::Command& c) {
         return false;
     }
     fixSelection();
+    syncPlugins();
     notify(ModelEvent::Document);
     return true;
 }
@@ -54,12 +55,13 @@ bool AppModel::applyGroup(const std::string& label, const std::vector<document::
     session_->endGroup();
     lastError_.clear();
     fixSelection();
+    syncPlugins();
     notify(ModelEvent::Document);
     return true;
 }
 
-void AppModel::undo() { session_->undo(); fixSelection(); notify(ModelEvent::Document); }
-void AppModel::redo() { session_->redo(); fixSelection(); notify(ModelEvent::Document); }
+void AppModel::undo() { session_->undo(); fixSelection(); syncPlugins(); notify(ModelEvent::Document); }
+void AppModel::redo() { session_->redo(); fixSelection(); syncPlugins(); notify(ModelEvent::Document); }
 
 void AppModel::beginGesture(const std::string& label) { session_->beginGroup(label); }
 void AppModel::endGesture() { session_->endGroup(); notify(ModelEvent::Document); }
@@ -281,11 +283,59 @@ void AppModel::replaceDocument(project::Project p, project::Uid nextUid) {
     session_.reset();
     doc_ = std::make_unique<document::Document>(std::move(p), nextUid);
     session_ = std::make_unique<document::Session>(*doc_, svc_, engine_);
+    if (plugins_) {   // a new document: keep only the plugins it uses, and load them before its first build
+        std::set<uint64_t> keep;
+        auto note = [&](const project::DeviceSpec& d) { if (d.type == "plugin") keep.insert(d.uid); };
+        for (auto& t : project().tracks) { note(t.inst); for (auto& f : t.fx) note(f); }
+        for (auto& f : project().masterFx) note(f);
+        plugins_->retain(keep);
+        pluginFailed_.clear();
+        syncPluginsNoRebuild();
+    }
     session_->rebuild();
     savedRevision_ = doc_->revision();
     sel_ = {};
     fixSelection();
 }
+
+// ---- hosted plugins ----
+
+void AppModel::setPluginProvider(PluginProvider* p) { plugins_ = p; setActivePluginProvider(p); syncPlugins(); }
+
+bool AppModel::syncPluginsNoRebuild() {
+    if (!plugins_) return false;
+    bool changed = false;
+    auto check = [&](const project::DeviceSpec& d) {
+        if (d.type != "plugin" || d.plugin.empty() || plugins_->live(d.uid)) return;
+        const std::string key = std::to_string(d.uid) + "|" + d.plugin;
+        if (pluginFailed_.count(key)) return;
+        std::string err;
+        if (plugins_->ensure(d.uid, d.plugin, d.pluginState, err)) changed = true;
+        else { pluginFailed_.insert(key); reportError("plugin " + (d.pluginName.empty() ? d.plugin : d.pluginName) + ": " + err); }
+    };
+    for (auto& t : project().tracks) { check(t.inst); for (auto& f : t.fx) check(f); }
+    for (auto& f : project().masterFx) check(f);
+    return changed;
+}
+
+void AppModel::syncPlugins() {
+    if (syncPluginsNoRebuild()) session_->rebuild();
+}
+
+void AppModel::flushPluginStates() {
+    if (!plugins_) return;
+    auto flush = [&](const project::DeviceSpec& d) {
+        if (d.type != "plugin" || !plugins_->live(d.uid)) return;
+        const std::string s = plugins_->state(d.uid);
+        if (!s.empty() && s != d.pluginState) applyTransient({"device.set", {{"uid", d.uid}, {"field", "pluginState"}, {"value", s}}});
+    };
+    for (auto& t : project().tracks) { flush(t.inst); for (auto& f : t.fx) flush(f); }
+    for (auto& f : project().masterFx) flush(f);
+}
+
+const DeviceInfo* AppModel::deviceInfo(Chain chain, const project::DeviceSpec& d) { return deviceInfoFor(chain, d); }
+
+std::string AppModel::paramLabel(const project::DeviceSpec& d, std::string_view key) const { return paramLabelFor(d, key); }
 
 void AppModel::setSampleRate(double sr) {
     svc_.setSampleRate(sr);
@@ -335,6 +385,7 @@ bool AppModel::open(const std::string& path, std::string& error) {
 }
 
 bool AppModel::save(const std::string& path, std::string& error) {
+    flushPluginStates();
     try {
         document::saveProjectPackage(path, project(), doc_->nextUid(), *bank_, sampleNames_);
         path_ = path;

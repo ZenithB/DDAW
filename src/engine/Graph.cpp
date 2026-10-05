@@ -381,6 +381,7 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
 void Graph::warmUp(int chunks) {
     std::vector<float> l(kMaxBlock, 0.0f), r(kMaxBlock, 0.0f);
     ProcessContext ctx{sr_, 0.0, 120.0, false, false, 0.0, 0.0, 4, 4};
+    ctx.warmup = true;
     for (int c = 0; c < chunks; ++c) process(l.data(), r.data(), kMaxBlock, ctx, nullptr, 1.0f, nullptr);
     // back to the freshly built state (what the devices hold is now warm in cache, not different in value)
     for (auto& t : tracks_) {

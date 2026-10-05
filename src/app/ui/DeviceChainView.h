@@ -12,6 +12,7 @@ public:
     void resized() override;
     void paint(juce::Graphics&) override;
     void refresh(app::ModelEvent) override;
+    void tick() override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void mouseDown(const juce::MouseEvent&) override;
 

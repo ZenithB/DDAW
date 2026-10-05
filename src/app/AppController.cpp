@@ -16,6 +16,7 @@ AppController::AppController(AppModel& model, ui::MainComponent& main, AudioHost
     main_.addKeyListener(commands_.getKeyMappings());
     main_.onAudioSettings = [this] { audioSettings(); };
     main_.browser().onImportSample = [this] { importSample(); };
+    main_.browser().onScanPlugins = [this] { scanPlugins(); };
 #if JUCE_MAC
     juce::MenuBarModel::setMacMainMenu(this);
 #endif
@@ -178,6 +179,18 @@ void AppController::importSample() {
                               }
                               if (ok) { setStatus("Imported " + juce::String(ok) + " sample(s)"); model_.notify(ModelEvent::File); }
                           });
+}
+
+void AppController::scanPlugins() {
+    auto* pp = model_.pluginProvider();
+    if (!pp) return;
+    setStatus("Scanning for plugins...");
+    // let the status paint first: the scan loads every plugin on this thread and takes a few seconds
+    juce::Timer::callAfterDelay(60, [this, pp] {
+        pp->scan([this](const std::string& name) { setStatus("Scanning: " + juce::String(name)); });
+        setStatus(juce::String(int(pp->available().size())) + " plugin(s) found");
+        model_.notify(ModelEvent::File);
+    });
 }
 
 void AppController::audioSettings() {

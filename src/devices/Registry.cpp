@@ -12,9 +12,22 @@ std::unique_ptr<InstrumentDevice> createBuiltinInstrument(std::string_view type)
 std::unique_ptr<EffectDevice> createBuiltinEffect(std::string_view type);
 
 
+namespace {
+std::vector<std::pair<std::string, EffectFactory>>& extraEffects() {
+    static std::vector<std::pair<std::string, EffectFactory>> v;
+    return v;
+}
+}  // namespace
+
+void registerEffect(std::string_view type, EffectFactory f) {
+    for (auto& [t, fn] : extraEffects()) if (t == type) { fn = f; return; }
+    extraEffects().emplace_back(std::string(type), f);
+}
+
 std::unique_ptr<EffectDevice> createEffect(std::string_view type) {
     if (type == "stubgain") return std::make_unique<StubGain>();
     if (auto d = createBuiltinEffect(type)) return d;
+    for (auto& [t, fn] : extraEffects()) if (t == type) return fn();
     return nullptr;
 }
 

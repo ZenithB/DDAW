@@ -11,7 +11,7 @@ const ParamSpec kPan{0, "pan", -1.0f, 1.0f, 0.0f, Curve::Linear, 0, false};
 
 bool targetSpec(const project::Track& t, const project::ModTarget& m, ParamSpec& out, double& stored) {
     auto fromDevice = [&](const project::DeviceSpec& d, app::Chain chain) {
-        const auto* info = app::findDevice(chain, d.type);
+        const auto* info = app::deviceInfoFor(chain, d);
         if (!info) return false;
         for (const auto& ps : info->params)
             if (m.pkey == ps.key) {
@@ -34,10 +34,9 @@ bool targetSpec(const project::Track& t, const project::ModTarget& m, ParamSpec&
 
 juce::String describeTarget(const project::Track& t, const project::ModTarget& m) {
     if (m.dest == "mix") return m.pkey == "gain" ? "Volume" : m.pkey == "pan" ? "Pan" : juce::String(m.pkey);
-    const juce::String p = app::paramLabel(m.pkey);
-    if (m.dest == "inst") return p;
-    juce::String dev = m.fxId;
-    for (const auto& d : t.fx) if (d.id == m.fxId) { if (const auto* info = app::findDevice(app::Chain::Effect, d.type)) dev = info->label; }
+    if (m.dest == "inst") return juce::String(app::paramLabelFor(t.inst, m.pkey));
+    juce::String dev = m.fxId, p = app::paramLabel(m.pkey);
+    for (const auto& d : t.fx) if (d.id == m.fxId) { if (const auto* info = app::deviceInfoFor(app::Chain::Effect, d)) dev = info->label; p = app::paramLabelFor(d, m.pkey); }
     return dev + " " + p;
 }
 
@@ -48,14 +47,15 @@ void pickParam(app::AppModel& model, project::Uid track, juce::Component* anchor
     juce::PopupMenu menu;
     int id = 1;
     auto addDevice = [&](const juce::String& title, app::Chain chain, const project::DeviceSpec& d, const std::string& dest, const std::string& fxId) {
-        const auto* info = app::findDevice(chain, d.type);
+        const auto* info = app::deviceInfoFor(chain, d);
         if (!info || info->params.empty()) return;
         juce::PopupMenu sub;
         for (const auto& ps : info->params) {
             if (audioRateOnly && !ps.audioRate) continue;
             auto it = d.params.find(ps.key);
-            PickedParam pp{dest, fxId, ps.key, app::paramLabel(ps.key) + " (" + info->label + ")", ps, it != d.params.end() ? it->second : double(ps.def)};
-            sub.addItem(id++, app::paramLabel(ps.key));
+            const auto name = app::paramLabelFor(d, ps.key);
+            PickedParam pp{dest, fxId, ps.key, name + " (" + info->label + ")", ps, it != d.params.end() ? it->second : double(ps.def)};
+            sub.addItem(id++, name);
             choices->push_back(pp);
         }
         if (sub.getNumItems() > 0) menu.addSubMenu(title, sub);

@@ -107,7 +107,11 @@ if(DDAW_BUILD_DDSP)
 endif()
 
 if(DDAW_BUILD_APP)
+    add_subdirectory(src/plugins)
     add_subdirectory(src/app)
+    # the soak can host real AudioUnits (--plugins)
+    target_link_libraries(ddaw_soak PRIVATE ddaw_plugins)
+    target_compile_definitions(ddaw_soak PRIVATE DDAW_SOAK_PLUGINS=1)
 endif()
 
 if(DDAW_BUILD_TESTS)

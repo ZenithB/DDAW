@@ -14,6 +14,7 @@
 #include "app/ui/ExportDialog.h"
 #include "project/ProjectJson.h"
 #include "app/ui/MainComponent.h"
+#include "plugins/PluginProvider.h"
 #include "app/ui/RecordOptions.h"
 
 using namespace ddaw;
@@ -26,7 +27,7 @@ int main(int argc, char** argv) {
     bool demo = false, play = false, arm = false;
     std::string popup;   // "export" or "record": render that dialog alone
     int w = 1440, h = 900;
-    std::string mainTab = "session", detail = "devices", selClip, instrument, lane;
+    std::string mainTab = "session", detail = "devices", selClip, instrument, lane, pluginId;
     int selTrack = -1;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -41,10 +42,12 @@ int main(int argc, char** argv) {
         else if (a == "--detail") detail = next();
         else if (a == "--select-track") selTrack = std::stoi(next());
         else if (a == "--select-clip") selClip = next();
+        else if (a == "--plugin") pluginId = next();   // add this hosted plugin (a plugin id) as an effect to the selected track
         else if (a == "--lane") lane = next();   // piano roll lane: slide | pressure | bend (with some curves drawn on the first notes)
         else if (a == "--instrument") instrument = next();   // replace the selected track's instrument first
     }
 
+    struct HostGuard { ~HostGuard() { plugins::PluginHost::shutdown(); } } hostGuard;   // last to go: plugins outlive the graphs that hold them
     engine::Engine engine;
     engine.prepare(48000.0);
     app::AppModel model(engine, 48000.0);
@@ -123,6 +126,13 @@ int main(int argc, char** argv) {
         project::ControlBinding by; by.source = "pad:ly"; by.target = app::morphTarget(id, 0, 'y');
         model.apply({"binding.insert", {{"index", 0}, {"binding", project::bindingToJson(bx)}}});
         model.apply({"binding.insert", {{"index", 1}, {"binding", project::bindingToJson(by)}}});
+    }
+    std::unique_ptr<plugins::JucePluginProvider> provider;
+    if (!pluginId.empty() && model.selection().track) {
+        plugins::registerDevices();
+        provider = std::make_unique<plugins::JucePluginProvider>(juce::File(), 48000.0);
+        model.setPluginProvider(provider.get());
+        model.apply(app::edit::addPluginEffect(model.project(), model.selection().track, "fx", pluginId, pluginId.substr(pluginId.rfind('#') + 1)));
     }
     if (!lane.empty() && model.selection().clip.valid()) {   // curves on the first two notes, then show that lane
         const auto ref = model.selection().clip;

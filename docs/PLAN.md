@@ -192,7 +192,7 @@ Within the 50 ms target in both cases. The YIN window dominates; raising the pit
 
 ### Later milestones
 
-- **L1 Plugin hosting:** VST3/AU instruments and effects inside the app.
+- **L1 Plugin hosting:** VST3/AU instruments and effects inside the app. *Started 2026-10-06: hosting, state, UI and soak are in (ARCH 23); out-of-process loading, sidechain and per-note MPE are not.*
 - **L2 Custom training:** train DDSP models (including a z encoder) on Colab; import through the B1 export path.
 - **L3 Learned morph maps.**
 - **L4 Collaboration:** CRDT layer over the command model.
@@ -389,3 +389,7 @@ Follow-ups surfaced by the ports (none blocks A3):
 ### B6 Synth families (2026-10-06)
 
 Done: `harmnoise` (hand-controlled harmonic + noise), `subtractive` (two PolyBLEP oscillators, sub, noise, ladder filter with its own ADSR, key and velocity tracking), `wavetable` (four built-in banks, mip-mapped, unison and spread), `waveshaper` (six transfer functions, 4x oversampled), `modal` (seven models of up to 24 resonant modes) and `perc` (hybrid body + noise + metal + click). Each passes the generic gates plus analytic tests of every control (closed forms where there are any: partial levels, Bessel spectra of the fold, exact Chebyshev harmonics, mode frequencies and T60), takes MPE expression, and `subtractive`, `wavetable` and `waveshaper` have A-rate ports. The soak now switches tracks among all of them: 30 minutes accelerated, 1738 graph swaps, 0 allocations, 0 NaN, 0 callbacks over budget in CPU time (2 wall-time outliers from scheduler preemption). Verified: Debug and Release 655 tests, hardened (UBSan) 602, GCC 15 with libstdc++ 602 (no app). Details and limits in ARCH 22.
+
+### L1 Plugin hosting (2026-10-06)
+
+Done: hosted VST3 and AudioUnit instruments and effects as `plugin` devices (a shared instance per device across graph rebuilds, state saved in the project, parameters exposed to automation, LFOs, macros and morph maps), the browser and device-chain UI, a scan with a crash guard and a cache, a hidden full-machine scan test, and a soak mode that adds and removes real AudioUnits while editing. Verified against Apple's AUDelay and DLSMusicDevice. Not done, and why it matters: plugins run in the app's process, so a plugin that crashes while playing takes the app down (the answer is a sandboxed host process, a milestone of its own); no sidechain or per-note MPE; nothing tested yet with third-party VST3s.

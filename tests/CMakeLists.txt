@@ -37,8 +37,8 @@ target_link_libraries(ddaw_tests PRIVATE nlohmann_json::nlohmann_json)
 catch_discover_tests(ddaw_tests ADD_TAGS_AS_LABELS)
 
 if(DDAW_BUILD_APP)
-    target_sources(ddaw_tests PRIVATE app/ui_test.cpp)
-    target_link_libraries(ddaw_tests PRIVATE ddaw_ui)
+    target_sources(ddaw_tests PRIVATE app/ui_test.cpp app/plugin_test.cpp)
+    target_link_libraries(ddaw_tests PRIVATE ddaw_ui ddaw_plugins)
 endif()
 
 if(DDAW_BUILD_DDSP)

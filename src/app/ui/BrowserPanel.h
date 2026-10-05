@@ -18,9 +18,11 @@ public:
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     std::function<void()> onImportSample;
+    // Scan for plugins: the app runs it (it can take seconds) and calls refresh when done. Without a hook the browser scans inline.
+    std::function<void()> onScanPlugins;
 
     struct Row {
-        enum Kind { Header, Device, Sample, Import } kind = Header;
+        enum Kind { Header, Device, Sample, Import, Plugin, Scan } kind = Header;
         juce::String label;
         app::Chain chain = app::Chain::Effect;
         std::string key;   // device type or sample id

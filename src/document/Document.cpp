@@ -301,6 +301,7 @@ Document::Exec Document::execute(const Command& c) {
             if (v.is_null()) d.srcPitch.reset(); else if (v.is_number()) d.srcPitch = v.get<double>(); else bad("device.srcPitch needs a number or null");
             ex.info = structuralChange();
         }
+        else if (f == "pluginState") { if (!v.is_string()) bad("device.pluginState needs a string"); old = d.pluginState; d.pluginState = v.get<std::string>(); }   // the plugin's own state: no rebuild
         else bad("unknown device field '" + f + "'");
         ex.inverse = {"device.set", {{"uid", d.uid}, {"field", f}, {"value", old}}};
     } else if (k == "device.param") {

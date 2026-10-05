@@ -143,4 +143,29 @@ double paramFromUnit(const ParamSpec& s, double u) {
     return std::clamp(v, lo, hi);
 }
 
+namespace {
+PluginProvider* gProvider = nullptr;
+std::map<uint64_t, std::unique_ptr<DeviceInfo>> gPluginInfos;
+}  // namespace
+
+void setActivePluginProvider(PluginProvider* p) { gProvider = p; gPluginInfos.clear(); }
+
+const DeviceInfo* deviceInfoFor(Chain chain, const project::DeviceSpec& d) {
+    if (d.type != "plugin") return findDevice(chain, d.type);
+    if (!gProvider || !gProvider->live(d.uid)) return nullptr;
+    const auto params = gProvider->params(d.uid);
+    auto& slot = gPluginInfos[d.uid];
+    if (!slot || slot->params.data() != params.data() || slot->label != (d.pluginName.empty() ? "Plugin" : d.pluginName))
+        slot = std::make_unique<DeviceInfo>(DeviceInfo{"plugin", d.pluginName.empty() ? "Plugin" : d.pluginName, "Plugins", chain, params});
+    return slot.get();
+}
+
+std::string paramLabelFor(const project::DeviceSpec& d, std::string_view key) {
+    if (d.type == "plugin" && gProvider && gProvider->live(d.uid)) {
+        const auto params = gProvider->params(d.uid);
+        for (size_t i = 0; i < params.size(); ++i) if (key == params[i].key) return gProvider->paramName(d.uid, i);
+    }
+    return paramLabel(key);
+}
+
 }  // namespace ddaw::app
