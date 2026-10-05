@@ -44,6 +44,7 @@ public:
     TransportBar& transport() { return transport_; }
     void tick() { timerCallback(); }
     BrowserPanel& browser() { return browser_; }
+    ClipEditor& clipEditor() { return clip_; }
 
 private:
     void timerCallback() override;

@@ -9,6 +9,7 @@
 #include "devices/instruments/follow.h"
 #include "devices/schema/Schema.generated.h"
 #include "devices/schema/SchemaB4.h"
+#include "devices/schema/SchemaB6.h"
 
 namespace ddaw::app {
 
@@ -26,9 +27,15 @@ std::vector<DeviceInfo> build() {
         {"duo", "Duo", "Synth", C::Instrument, sp(kInstDuo)},
         {"fm", "FM", "Synth", C::Instrument, sp(kInstFm)},
         {"fmop", "FM Operators", "Synth", C::Instrument, sp(kInstFmop)},
+        {"harmnoise", "Harmonic + Noise", "Synth", C::Instrument, sp(kInstHarmnoise)},
+        {"subtractive", "Subtractive", "Synth", C::Instrument, sp(kInstSubtractive)},
+        {"wavetable", "Wavetable", "Synth", C::Instrument, sp(kInstWavetable)},
+        {"waveshaper", "Waveshaper", "Synth", C::Instrument, sp(kInstWaveshaper)},
         {"keys", "Keys", "Keys and Plucks", C::Instrument, sp(kInstKeys)},
         {"pluck", "Pluck", "Keys and Plucks", C::Instrument, sp(kInstPluck)},
+        {"modal", "Modal", "Keys and Plucks", C::Instrument, sp(kInstModal)},
         {"drum", "Drum Machine", "Drums", C::Instrument, sp(kInstDrum)},
+        {"perc", "Percussion", "Drums", C::Instrument, sp(kInstPerc)},
         {"ddsp", "DDSP Instrument", "Tracking", C::Instrument, sp(kInstDdsp)},
         {"follow", "Voice Follower", "Tracking", C::Instrument, sp(kInstFollow)},
         {"sampler", "Sampler", "Sampled", C::Instrument, sp(kInstSampler)},

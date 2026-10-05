@@ -250,8 +250,8 @@ int main(int argc, char** argv) {
             case 17: if (!p.arr.empty()) { auto it = p.arr.begin(); std::advance(it, long(pick(p.arr.size())));
                          try { ok = model.apply(app::edit::moveArrClip(p, it->first, 96.0 * double(pick(40)))); } catch (...) { ok = false; } } break;
             case 18: if (nT) { const auto& t = p.tracks[pick(nT)]; if (t.kind == project::TrackKind::Synth) {
-                         static const char* is[] = {"poly", "mono", "duo", "fm", "keys", "pluck", "sampler", "fmop"};
-                         const std::string ty = is[pick(8)];
+                         static const char* is[] = {"poly", "mono", "duo", "fm", "keys", "pluck", "sampler", "fmop", "harmnoise", "subtractive", "wavetable", "waveshaper", "modal", "perc"};
+                         const std::string ty = is[pick(14)];
                          if (ty != "sampler") ok = model.apply(app::edit::setInstrument(p, t.uid, ty)); } } break;
             case 19: ok = model.apply(document::cmd::setMeta("loopOn", rng() % 2 == 0)); break;
             case 20: model.setMetronome(rng() % 2 == 0); break;

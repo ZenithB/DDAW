@@ -36,7 +36,7 @@ int main() {
     const ProcessContext ctx{sr, 0.0, 120.0, true, false, 0.0, 0.0, 4, 4};
     std::vector<float> l(kMaxBlock), r(kMaxBlock);
     std::vector<Result> res;
-    const char* insts[] = {"drum", "duo", "fm", "fmop", "follow", "granular", "keys", "ksampler", "mono", "pluck", "poly", "sampler"};
+    const char* insts[] = {"drum", "duo", "fm", "fmop", "follow", "granular", "harmnoise", "keys", "ksampler", "modal", "mono", "perc", "pluck", "poly", "sampler", "subtractive", "waveshaper", "wavetable"};
     const char* fxs[] = {"autofilt", "autopan", "autotune", "cheby", "chorus", "comp", "crush", "delay", "dist", "duck", "eq", "eq7", "filter", "gate",
                          "mbcomp", "opto", "phaser", "pingpong", "plate", "reverb", "shift", "trem", "vib", "widen"};
     for (const char* t : insts) {

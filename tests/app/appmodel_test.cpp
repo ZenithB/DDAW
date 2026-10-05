@@ -5,6 +5,7 @@
 
 #include "app/model/AppModel.h"
 #include "app/model/Catalog.h"
+#include "devices/Registry.h"
 #include "app/model/Edit.h"
 
 using namespace ddaw;
@@ -28,6 +29,29 @@ TEST_CASE("catalog: every device has a schema and a readable label", "[appmodel]
     CHECK(paramLabel("lfoShape") == "LFO Shape");
     CHECK(paramLabel("vibAmt") == "Vib Amt");
     CHECK(paramLabel("cutoff") == "Cutoff");
+}
+
+TEST_CASE("catalog: the B6 synth families are listed with the parameters their devices have", "[appmodel]") {
+    for (const char* type : {"harmnoise", "subtractive", "wavetable", "waveshaper", "modal", "perc"}) {
+        INFO(type);
+        const auto* info = findDevice(Chain::Instrument, type);
+        REQUIRE(info);
+        auto d = createInstrument(type);
+        REQUIRE(d);
+        REQUIRE(info->params.size() == d->params().size());
+        for (size_t i = 0; i < info->params.size(); ++i) CHECK(std::string(info->params[i].key) == d->params()[i].key);
+        CHECK(info->label.size() > 3);
+    }
+    // and the A-rate ports the schema marks are the ones the families document
+    auto aRate = [&](const char* type) {
+        std::vector<std::string> keys;
+        for (const auto& p : findDevice(Chain::Instrument, type)->params) if (p.audioRate) keys.emplace_back(p.key);
+        return keys;
+    };
+    CHECK(aRate("subtractive") == std::vector<std::string>{"cutoff", "pitch"});
+    CHECK(aRate("wavetable") == std::vector<std::string>{"pos", "pitch"});
+    CHECK(aRate("waveshaper") == std::vector<std::string>{"drive", "bias", "pitch"});
+    CHECK(aRate("harmnoise").empty());
 }
 
 TEST_CASE("catalog: parameter curves round-trip", "[appmodel]") {

@@ -228,7 +228,9 @@ TEST_CASE("mpe: every pitched instrument follows a note's bend", "[mpe][engine]"
     // the unbent fundamental, and a five-semitone bend (x1.3348, 293.7 Hz) that lands between every harmonic of it, of duo's
     // second oscillator (a fifth up) and of the fm / keys modulators
     for (const Case c : {Case{"duo", 57, 220.0}, Case{"fm", 57, 220.0}, Case{"keys", 57, 220.0}, Case{"follow", 57, 220.0},
-                         Case{"sampler", 48, 220.0}, Case{"ksampler", 48, 220.0}, Case{"granular", 60, 220.0}}) {
+                         Case{"sampler", 48, 220.0}, Case{"ksampler", 48, 220.0}, Case{"granular", 60, 220.0},
+                         Case{"harmnoise", 57, 220.0}, Case{"subtractive", 57, 220.0}, Case{"wavetable", 57, 220.0}, Case{"waveshaper", 57, 220.0},
+                         Case{"modal", 57, 220.0}}) {
         INFO(c.type);
         const double up = c.hz * std::pow(2.0, 5.0 / 12.0);
         const auto flat = play(c.type, c.note, 0.0f, 0.0f), bent = play(c.type, c.note, 5.0f, 0.0f);
@@ -239,7 +241,7 @@ TEST_CASE("mpe: every pitched instrument follows a note's bend", "[mpe][engine]"
 }
 
 TEST_CASE("mpe: pressure raises the level of the instruments that take it", "[mpe][engine]") {
-    for (const char* type : {"duo", "fm", "keys", "follow", "sampler", "ksampler"}) {
+    for (const char* type : {"duo", "fm", "keys", "follow", "sampler", "ksampler", "harmnoise", "subtractive", "wavetable", "waveshaper", "modal"}) {   // perc is one-shot: its test is in perc_test
         INFO(type);
         const int note = (std::string(type) == "sampler" || std::string(type) == "ksampler") ? 48 : 57;
         const auto flat = play(type, note, 0.0f, 0.0f), pressed = play(type, note, 0.0f, 1.0f);
@@ -253,7 +255,8 @@ TEST_CASE("mpe: pressure raises the level of the instruments that take it", "[mp
 
 TEST_CASE("mpe: an unexpressed note sounds exactly as before, in every instrument", "[mpe][engine]") {
     // expression for a note id that is not sounding is ignored, and a neutral note is bit-identical to one that was never touched
-    for (const char* type : {"duo", "fm", "keys", "follow", "sampler", "ksampler", "granular", "poly", "mono", "fmop"}) {
+    for (const char* type : {"duo", "fm", "keys", "follow", "sampler", "ksampler", "granular", "poly", "mono", "fmop",
+                             "harmnoise", "subtractive", "wavetable", "waveshaper", "modal"}) {   // perc is one-shot: its test is in perc_test
         INFO(type);
         const int note = (std::string(type) == "sampler" || std::string(type) == "ksampler") ? 48 : 57;
         auto d = createInstrument(type);
@@ -340,4 +343,31 @@ TEST_CASE("clip expression: a looping clip plays its curves every pass, and a ch
     REQUIRE(res.l.size() > size_t(3.0 * kSr));
     CHECK(zeroCrossHz(res.l, 0.5, 0.3) == Approx(880.0).margin(10.0));     // first pass
     CHECK(zeroCrossHz(res.l, 2.5, 0.3) == Approx(880.0).margin(10.0));     // second pass: the curve plays again
+}
+
+TEST_CASE("clip expression: a graph swap while a note sounds keeps its curves, as edited", "[mpe][clip][engine]") {
+    auto play = [&](const std::string& before, const std::string& after) {
+        Engine e;
+        e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::Bypass, 0});
+        e.setInitialGraph(buildGraph(project::importFixtureJson(clipProject(before)), kSr, 1).graph);
+        Cmd c; c.type = CmdType::ClipLaunch; c.epoch = 1; c.clipLaunch = {0, 0}; e.commands().push(c);   // launches while stopped wait for play
+        Cmd t; t.type = CmdType::TransportPlay; t.epoch = 1; t.transportPlay = {0, 0.0}; e.commands().push(t);
+        std::vector<float> l(128u), r(128u), out;
+        auto run = [&](double sec) { for (int b = 0; b < int(sec * kSr / 128); ++b) { e.process(l.data(), r.data(), 128); out.insert(out.end(), l.begin(), l.end()); } };
+        run(1.0);
+        auto next = buildGraph(project::importFixtureJson(clipProject(after)), kSr, 2).graph;   // the note is edited while it sounds
+        REQUIRE(e.postGraph(next));
+        run(1.2);
+        return out;
+    };
+    // the curve is replaced: +12 semitones before the swap, -12 after. Without the carry the sounding note would fall to neutral.
+    auto out = play(R"(,"uid":7,"bend":[{"t":0,"v":12}])", R"(,"uid":7,"bend":[{"t":0,"v":-12}])");
+    CHECK(zeroCrossHz(out, 0.5, 0.3) == Approx(880.0).margin(10.0));
+    CHECK(zeroCrossHz(out, 1.6, 0.3) == Approx(220.0).margin(6.0));
+    // the curve is removed in the edit: the note carries on at neutral expression
+    out = play(R"(,"uid":7,"bend":[{"t":0,"v":12}])", R"(,"uid":7)");
+    CHECK(zeroCrossHz(out, 1.6, 0.3) == Approx(440.0).margin(8.0));
+    // another note's curves are not borrowed
+    out = play(R"(,"uid":7,"bend":[{"t":0,"v":12}])", R"(,"uid":8,"bend":[{"t":0,"v":-12}])");
+    CHECK(zeroCrossHz(out, 1.6, 0.3) == Approx(440.0).margin(8.0));
 }

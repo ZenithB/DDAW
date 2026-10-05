@@ -160,6 +160,10 @@ void Graph::finalize() {
         t.pdcL.prepare(t.pdcSamples + 1);  // read(pdc + 1) is pdc samples behind the sample just written
         t.pdcR.prepare(t.pdcSamples + 1);
     }
+    exprByUid_.clear();
+    for (size_t i = 0; i < exprSeqs_.size(); ++i) if (exprSeqs_[i].uid) exprByUid_.push_back({exprSeqs_[i].uid, int(i)});
+    std::sort(exprByUid_.begin(), exprByUid_.end());
+    if (exprByUid_.size() != exprSeqs_.size()) exprByUid_.clear();   // seqs without an identity: fall back to the scan
     int masterLat = 0;
     for (auto& f : masterFx_) masterLat += f.dev->latencySamples();
     latency_ = maxChain + masterLat;
@@ -184,6 +188,23 @@ void Graph::inheritNotes(const Graph& old) noexcept {
     }
     for (size_t i = 0; i < old.nGates_; ++i)
         if (old.gates_[i].track < tracks_.size()) scheduleGate(old.gates_[i].frame, old.gates_[i].track, old.gates_[i].noteId);
+    // A sounding note keeps playing its curves, as edited: they are found again by the note's identity. The note's timing
+    // stays what it was when it started. A note whose curves are gone (or which was deleted) just holds neutral expression.
+    for (size_t i = 0; i < old.nPlayers_; ++i) {
+        const ExprPlayer& p = old.players_[i];
+        const int seq = p.uid ? findExprSeq(p.uid) : -1;
+        if (seq < 0 || p.track >= tracks_.size() || nPlayers_ >= kMaxExprPlayers) continue;
+        players_[nPlayers_++] = {p.track, p.noteId, p.start, p.end, seq, {1e30f, 1e30f, 1e30f}, {0, 0, 0}, p.uid};   // `last` reset: the new voice gets the current values at once
+    }
+}
+
+int Graph::findExprSeq(uint64_t uid) const noexcept {
+    if (exprByUid_.size() == exprSeqs_.size()) {   // indexed by finalize(): binary search
+        const auto it = std::lower_bound(exprByUid_.begin(), exprByUid_.end(), uid, [](const std::pair<uint64_t, int>& a, uint64_t u) { return a.first < u; });
+        return it != exprByUid_.end() && it->first == uid ? it->second : -1;
+    }
+    for (size_t i = 0; i < exprSeqs_.size(); ++i) if (exprSeqs_[i].uid == uid) return int(i);   // hand-built graph, not finalized
+    return -1;
 }
 
 void Graph::fireDucks(int src, uint8_t pitch) noexcept {
@@ -436,7 +457,7 @@ void Graph::performance(uint16_t track, const PerformanceFrame& f) noexcept {
 void Graph::startExpression(uint16_t track, uint32_t noteId, double startTick, double durTicks, int seq) noexcept {
     if (seq < 0 || size_t(seq) >= exprSeqs_.size() || track >= tracks_.size()) return;
     if (nPlayers_ >= kMaxExprPlayers) return;   // more expressive notes at once than anyone plays: the extras sound without
-    players_[nPlayers_++] = {track, noteId, startTick, startTick + std::max(durTicks, 1.0), seq, {1e30f, 1e30f, 1e30f}, {0, 0, 0}};
+    players_[nPlayers_++] = {track, noteId, startTick, startTick + std::max(durTicks, 1.0), seq, {1e30f, 1e30f, 1e30f}, {0, 0, 0}, exprSeqs_[size_t(seq)].uid};
 }
 
 void Graph::updateExpression(double nowTick) noexcept {

@@ -76,6 +76,7 @@ std::vector<int> exprIndices(Graph& g, const std::vector<project::Note>& notes) 
         const auto& n = notes[i];
         if (n.bend.empty() && n.slide.empty() && n.pressure.empty()) continue;
         ExprSeq s;
+        s.uid = n.uid;
         const std::vector<project::ExprPoint>* src[3] = {&n.slide, &n.pressure, &n.bend};
         for (int d = 0; d < 3; ++d) {
             for (const auto& p : *src[d]) s.dim[size_t(d)].push_back({float(p.t), float(p.v)});

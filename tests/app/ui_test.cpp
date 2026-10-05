@@ -239,6 +239,162 @@ TEST_CASE("piano roll: add, move, resize, velocity, select all, duplicate and de
     CHECK(notes().size() == 7);
 }
 
+TEST_CASE("piano roll: expression lanes edit per-note bend, slide and pressure curves", "[ui][clipeditor][expression]") {
+    Rig r; r.demo();
+    r.m->selectClip({r.m->project().tracks[3].uid, "s3", ""});
+    ui::ClipEditor v(*r.m);
+    v.setSize(1100, 380);
+    v.refresh(app::ModelEvent::Selection);
+    v.scale().originTick = 0; v.scale().pxPerBeat = 64;
+    const edit::ClipRef ref{r.m->project().tracks[3].uid, "s3", ""};
+    auto notes = [&]() -> const std::vector<project::Note>& { return edit::findClip(r.m->project(), ref)->notes; };
+    const auto uid = notes().front().uid;
+    auto note = [&]() { return *std::find_if(notes().begin(), notes().end(), [&](auto& q) { return q.uid == uid; }); };
+    const double dur = note().durTicks;
+    REQUIRE(dur >= 48);
+    CHECK(note().bend.empty());
+
+    // no expression lane is up yet: the lane is velocity, and the expression chips exist
+    CHECK(v.lane() == ui::ClipEditor::Lane::Velocity);
+    const int velLaneH = v.laneH();
+    v.setLane(ui::ClipEditor::Lane::Bend);
+    CHECK(v.laneH() > velLaneH);
+    CHECK(v.laneRect().getBottom() == v.getHeight());
+    auto at = [&](double tRel, double value) { return pt(v.laneX(note(), tRel), v.laneY(value)); };
+
+    // a click inside the note adds a point there (and selects the note); the note itself is not moved
+    const auto before = note();
+    Mouse(v).click(at(dur / 2, 5.0));
+    REQUIRE(note().bend.size() == 1);
+    CHECK(note().bend[0].t == Approx(dur / 2).margin(1.5));
+    CHECK(note().bend[0].v == Approx(5.0).margin(0.35));
+    CHECK(note().startTicks == before.startTicks);
+    CHECK(note().pitch == before.pitch);
+    CHECK(v.selected().count(uid) == 1);
+    CHECK(v.selectedPoint() == 0);
+    CHECK(note().slide.empty());                                       // only the lane being edited changes
+
+    // a second point later in the note; the curve stays sorted
+    Mouse(v).click(at(dur * 0.8, -3.0));
+    Mouse(v).click(at(dur * 0.15, 2.0));
+    REQUIRE(note().bend.size() == 3);
+    CHECK(note().bend[0].t < note().bend[1].t);
+    CHECK(note().bend[1].t < note().bend[2].t);
+    CHECK(note().bend[2].v == Approx(-3.0).margin(0.35));
+
+    // dragging a point moves it in time and value, but not past its neighbours
+    {
+        const auto p1 = note().bend[1];
+        Mouse m(v);
+        const auto from = at(p1.t, p1.v);
+        m.down(from).drag(pt(from.x + 5, from.y)).drag(at(dur * 0.95, 8.0)).up(at(dur * 0.95, 8.0));
+        REQUIRE(note().bend.size() == 3);
+        CHECK(note().bend[1].v == Approx(8.0).margin(0.35));
+        CHECK(note().bend[1].t < note().bend[2].t);                    // stopped one tick short of the next point
+        CHECK(note().bend[1].t > p1.t);
+    }
+    CHECK(v.selectedPoint() == 1);
+
+    // one gesture is one undo step
+    r.m->undo();
+    CHECK(note().bend[1].v == Approx(5.0).margin(0.35));
+    r.m->redo();
+    CHECK(note().bend[1].v == Approx(8.0).margin(0.35));
+
+    // Delete removes the picked point, not the note
+    CHECK(v.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey)));
+    CHECK(note().bend.size() == 2);
+    CHECK(notes().size() == 6);
+
+    // Alt-click on a point removes it too
+    {
+        const auto p = note().bend[0];
+        Mouse m(v, juce::ModifierKeys(juce::ModifierKeys::altModifier));
+        m.click(at(p.t, p.v));
+        CHECK(note().bend.size() == 1);
+    }
+
+    // a click in the lane outside every note's span adds nothing
+    {
+        const size_t had = note().bend.size();
+        Mouse(v).click(pt(v.laneX(note(), dur) + 40, v.laneY(1.0)));
+        CHECK(note().bend.size() == had);
+    }
+
+    // values beyond +-12 semitones widen the lane
+    CHECK(v.bendSpan() == 12.0);
+    {
+        auto n = note();
+        n.bend.push_back({dur * 0.9, 20.0});
+        r.m->apply(edit::editNote(ref, n));
+        CHECK(v.bendSpan() == 24.0);
+        r.m->undo();
+        CHECK(v.bendSpan() == 12.0);
+    }
+
+    // slide and pressure lanes are separate curves, range 0..1
+    v.setLane(ui::ClipEditor::Lane::Slide);
+    Mouse(v).click(at(dur * 0.5, 0.75));
+    REQUIRE(note().slide.size() == 1);
+    CHECK(note().slide[0].v == Approx(0.75).margin(0.02));
+    v.setLane(ui::ClipEditor::Lane::Pressure);
+    Mouse(v).click(at(dur * 0.25, 5.0));                               // above the lane: clamps to 1
+    REQUIRE(note().pressure.size() == 1);
+    CHECK(note().pressure[0].v == Approx(1.0).margin(0.001));
+    CHECK(note().bend.size() == 1);                                    // the bend curve is untouched
+
+    // freehand drawing replaces what is under the stroke with a dense, sorted run of points
+    v.setLane(ui::ClipEditor::Lane::Slide);
+    v.setDraw(true);
+    {
+        Mouse m(v);
+        m.down(at(0, 0.1));
+        for (int i = 1; i <= 20; ++i) m.drag(at(dur * i / 20.0, 0.1 + 0.04 * i));
+        m.up(at(dur, 0.9));
+    }
+    {
+        const auto& sl = note().slide;
+        REQUIRE(sl.size() >= 8);
+        for (size_t i = 1; i < sl.size(); ++i) { CHECK(sl[i].t > sl[i - 1].t); CHECK(sl[i].v >= sl[i - 1].v - 1e-9); }
+        CHECK(sl.front().v < 0.2);
+        CHECK(sl.back().v > 0.8);
+    }
+    v.setDraw(false);
+
+    // a duplicate carries the curves; Clear empties the lane for the selected notes
+    v.selectAll();
+    CHECK(v.keyPressed(juce::KeyPress('d', juce::ModifierKeys::commandModifier, 0)));
+    REQUIRE(notes().size() == 12);
+    {
+        size_t withSlide = 0;
+        for (auto& n : notes()) if (!n.slide.empty()) ++withSlide;
+        CHECK(withSlide == 2);
+        CHECK(notes().back().uid != uid);
+    }
+    CHECK(!notes()[6].slide.empty());                                  // the copy of the first note keeps its curve
+    r.m->undo();
+    CHECK(notes().size() == 6);
+    v.selectAll();
+    // Clear empties the lane's curves on the selected notes
+    std::vector<ui::Chip*> chips;
+    findAll(v, chips);
+    ui::Chip* clear = nullptr;
+    for (auto* c : chips) if (c->text() == "Clear") clear = c;
+    REQUIRE(clear != nullptr);
+    CHECK(clear->isVisible());
+    clear->onClick();
+    CHECK(note().slide.empty());
+    CHECK(note().bend.size() == 1);                                    // other lanes stay
+    r.m->undo();
+    CHECK_FALSE(note().slide.empty());
+
+    // drum clips take no expression: the lane is velocity and the expression chips are hidden
+    r.m->selectClip({r.m->project().tracks[0].uid, "s1", ""});
+    v.refresh(app::ModelEvent::Selection);
+    CHECK(v.lane() == ui::ClipEditor::Lane::Velocity);
+    for (auto* c : chips) if (c->text() == "Bend" || c->text() == "Slide" || c->text() == "Press") CHECK_FALSE(c->isVisible());
+}
+
 TEST_CASE("piano roll: marquee selection and arrow nudging; drum rows", "[ui][clipeditor]") {
     Rig r; r.demo();
     r.m->selectClip({r.m->project().tracks[0].uid, "s1", ""});   // drums: pads as rows

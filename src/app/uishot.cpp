@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
     bool demo = false, play = false, arm = false;
     std::string popup;   // "export" or "record": render that dialog alone
     int w = 1440, h = 900;
-    std::string mainTab = "session", detail = "devices", selClip, instrument;
+    std::string mainTab = "session", detail = "devices", selClip, instrument, lane;
     int selTrack = -1;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -41,6 +41,7 @@ int main(int argc, char** argv) {
         else if (a == "--detail") detail = next();
         else if (a == "--select-track") selTrack = std::stoi(next());
         else if (a == "--select-clip") selClip = next();
+        else if (a == "--lane") lane = next();   // piano roll lane: slide | pressure | bend (with some curves drawn on the first notes)
         else if (a == "--instrument") instrument = next();   // replace the selected track's instrument first
     }
 
@@ -123,8 +124,25 @@ int main(int argc, char** argv) {
         model.apply({"binding.insert", {{"index", 0}, {"binding", project::bindingToJson(bx)}}});
         model.apply({"binding.insert", {{"index", 1}, {"binding", project::bindingToJson(by)}}});
     }
+    if (!lane.empty() && model.selection().clip.valid()) {   // curves on the first two notes, then show that lane
+        const auto ref = model.selection().clip;
+        const auto* c = app::edit::findClip(model.project(), ref);
+        for (size_t i = 0; c && i < std::min<size_t>(2, c->notes.size()); ++i) {
+            auto n = c->notes[i];
+            const double d = n.durTicks;
+            n.bend = {{0, 0}, {d * 0.3, 2.0}, {d * 0.7, -1.5}, {d, 0}};
+            n.slide = {{0, 0.1}, {d * 0.5, 0.8}, {d, 0.3}};
+            n.pressure = {{0, 0.2}, {d * 0.4, 0.9}, {d, 0.1}};
+            model.apply(app::edit::editNote(ref, n));
+            c = app::edit::findClip(model.project(), ref);
+        }
+    }
     main.showDetail(detail == "morph" ? ui::MainComponent::DetailTab::Morph : detail == "arate" ? ui::MainComponent::DetailTab::AudioRate : detail == "mod" ? ui::MainComponent::DetailTab::Modulation : detail == "clip" ? ui::MainComponent::DetailTab::Clip : detail == "input" ? ui::MainComponent::DetailTab::Input : ui::MainComponent::DetailTab::Devices);
     main.resized();
+    if (!lane.empty()) {
+        main.clipEditor().setLane(lane == "bend" ? ui::ClipEditor::Lane::Bend : lane == "slide" ? ui::ClipEditor::Lane::Slide : ui::ClipEditor::Lane::Pressure);
+        main.clipEditor().selectAll();
+    }
     main.tick();
     (void)play;
     const auto img = main.createComponentSnapshot(main.getLocalBounds(), true, 1.0f);

@@ -127,6 +127,7 @@ struct DuckRoute {
 struct ExprSeq {
     struct Pt { float t, v; };
     std::array<std::vector<Pt>, 3> dim;
+    uint64_t uid = 0;   // the project note these belong to: a swap re-finds a sounding note's curves in the new graph by it
 };
 
 class Graph {
@@ -194,6 +195,8 @@ public:
     void startExpression(uint16_t track, uint32_t noteId, double startTick, double durTicks, int seq) noexcept;
     void updateExpression(double nowTick) noexcept;
     void clearExpression() noexcept { nPlayers_ = 0; }
+    int exprSeqCount() const noexcept { return int(exprSeqs_.size()); }
+    int exprPlayerCount() const noexcept { return int(nPlayers_); }
 
     // ---- scheduling (driven by the Engine) ----
     const SchedParams& schedParams() const noexcept { return sched_; }
@@ -251,7 +254,9 @@ private:
     std::vector<float> mixL_, mixR_, tmpL_, tmpR_;
     std::array<Active, kMaxActive> active_{};
     size_t nActive_ = 0;
-    struct ExprPlayer { uint16_t track; uint32_t noteId; double start, end; int seq; std::array<float, 3> last; std::array<uint32_t, 3> idx; };
+    struct ExprPlayer { uint16_t track; uint32_t noteId; double start, end; int seq; std::array<float, 3> last; std::array<uint32_t, 3> idx; uint64_t uid; };
+    int findExprSeq(uint64_t uid) const noexcept;   // index of the sequence of project note `uid` (-1: none)
+    std::vector<std::pair<uint64_t, int>> exprByUid_;   // sorted by uid; built by finalize()
     static constexpr size_t kMaxExprPlayers = 32;
     std::vector<ExprSeq> exprSeqs_;
     std::array<ExprPlayer, kMaxExprPlayers> players_{};

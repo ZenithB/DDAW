@@ -56,6 +56,7 @@ Command setClipLength(const ClipRef& r, const Project& p, double lenTicks);
 
 Command addNote(const ClipRef& r, int pitch, double start, double dur, double vel = 0.8);
 Command editNote(const ClipRef& r, const project::Note& n);
+Command addNoteCopy(const ClipRef& r, project::Note n);   // a new note (fresh identity) carrying n's pitch, timing, velocity and expression curves
 Command removeNote(const ClipRef& r, Uid noteUid);
 
 // ---- helpers ----

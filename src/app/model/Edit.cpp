@@ -160,6 +160,10 @@ Command addNote(const ClipRef& r, int pitch, double start, double dur, double ve
     return {"note.add", {{"clip", r.toJson()}, {"note", noteJson(n)}}};
 }
 Command editNote(const ClipRef& r, const project::Note& n) { return {"note.edit", {{"clip", r.toJson()}, {"uid", n.uid}, {"note", noteJson(n)}}}; }
+Command addNoteCopy(const ClipRef& r, project::Note n) {
+    n.uid = 0;
+    return {"note.add", {{"clip", r.toJson()}, {"note", noteJson(n)}}};
+}
 Command removeNote(const ClipRef& r, Uid uid) { return {"note.remove", {{"clip", r.toJson()}, {"uid", uid}}}; }
 
 double snapTicks(double t, double g) { return g > 0 ? std::round(t / g) * g : t; }
