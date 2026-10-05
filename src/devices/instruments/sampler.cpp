@@ -16,6 +16,7 @@
 
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
+#include "dsp/NoteExpr.h"
 #include "dsp/Adsr.h"
 
 namespace ddaw::devices {
@@ -36,6 +37,7 @@ struct Voice {
     Adsr env;
     float vel = 0.0f;
     uint64_t age = 0;
+    dsp::NoteExpr ex;   // MPE: bend scales the playback rate, pressure the level
 };
 
 class SamplerInst final : public InstrumentDevice {
@@ -80,6 +82,7 @@ public:
         v.noteId = noteId;
         v.pos = 0.0;
         v.step = step;
+        v.ex.clear();
         v.vel = std::clamp(velocity, 0.0f, 1.0f);
         v.age = ++age_;
         v.env.setAdsr(attack_, 0.0f, 1.0f, release_);  // Tone.Sampler fade: attack, hold, release
@@ -90,6 +93,10 @@ public:
     void noteOff(uint32_t noteId) override {
         for (auto& v : voices_)
             if (v.active && v.noteId == noteId) v.env.noteOff();
+    }
+
+    void noteExpression(uint32_t noteId, int dimension, float value) override {
+        for (auto& v : voices_) if (v.active && v.noteId == noteId) v.ex.set(dimension, value);
     }
 
     void process(float* l, float* r, int n, const ProcessContext&, const ModInputs&) override {
@@ -104,10 +111,11 @@ public:
                 if (!v.env.isActive() || v.pos >= frames) { v.active = false; break; }
                 float sl, sr;
                 b->readLin(v.pos, sl, sr);
-                const float g = e * v.vel * kOutGain;
+                v.ex.step();
+                const float g = e * v.vel * kOutGain * v.ex.gain();
                 l[k] += sl * g;
                 r[k] += sr * g;
-                v.pos += v.step;
+                v.pos += v.ex.bendS == 0.0f ? v.step : v.step * double(v.ex.pitchFactor());
             }
         }
     }

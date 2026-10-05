@@ -3,8 +3,8 @@
 namespace ddaw::ui {
 
 MainComponent::MainComponent(app::AppModel& m)
-    : model_(m), live_(m), transport_(m), browser_(m), session_(m), arrangement_(m), mixer_(m), clip_(m), devices_(m), input_(m, live_), mod_(m) {
-    for (juce::Component* c : std::initializer_list<juce::Component*>{&transport_, &browser_, &session_, &arrangement_, &mixer_, &clip_, &devices_, &input_, &mod_})
+    : model_(m), live_(m), controllers_(m, live_), transport_(m), browser_(m), session_(m), arrangement_(m), mixer_(m), clip_(m), devices_(m), input_(m, live_), mod_(m), arate_(m), morph_(m, &controllers_) {
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&transport_, &browser_, &session_, &arrangement_, &mixer_, &clip_, &devices_, &input_, &mod_, &arate_, &morph_})
         addAndMakeVisible(c);
     transport_.onAudioSettings = [this] { if (onAudioSettings) onAudioSettings(); };
     listener_ = model_.addListener([this](app::ModelEvent e) { onModel(e); });
@@ -27,6 +27,8 @@ void MainComponent::onModel(app::ModelEvent e) {
     devices_.refresh(e);
     input_.refresh(e);
     mod_.refresh(e);
+    arate_.refresh(e);
+    morph_.refresh(e);
     // opening a clip brings its editor forward
     if (e == app::ModelEvent::Selection && model_.selection().clip.valid() && detailTab_ != DetailTab::Clip) showDetail(DetailTab::Clip);
     if (e == app::ModelEvent::Transport && model_.arrangementMode() && model_.meters().playing && mainTab_ == MainTab::Session) {}
@@ -59,6 +61,8 @@ void MainComponent::showDetail(DetailTab t) {
     devices_.setVisible(t == DetailTab::Devices);
     input_.setVisible(t == DetailTab::Input);
     mod_.setVisible(t == DetailTab::Modulation);
+    arate_.setVisible(t == DetailTab::AudioRate);
+    morph_.setVisible(t == DetailTab::Morph);
     repaint();
 }
 
@@ -75,6 +79,8 @@ void MainComponent::resized() {
     devices_.setBounds(detail);
     input_.setBounds(detail);
     mod_.setBounds(detail);
+    arate_.setBounds(detail);
+    morph_.setBounds(detail);
     mainStrip_ = r.removeFromTop(kTabH);
     session_.setBounds(r);
     arrangement_.setBounds(r);
@@ -99,7 +105,7 @@ void MainComponent::paintTabs(juce::Graphics& g, juce::Rectangle<int> strip, con
 void MainComponent::paint(juce::Graphics& g) {
     g.fillAll(col::bg);
     paintTabs(g, mainStrip_, {"Session", "Arrangement", "Mixer"}, int(mainTab_));
-    paintTabs(g, detailStrip_, {"Clip", "Devices", "Input", "Modulation"}, int(detailTab_));
+    paintTabs(g, detailStrip_, {"Clip", "Devices", "Input", "Modulation", "Audio-rate", "Morph"}, int(detailTab_));
     // detail strip: selected track / clip summary on the right
     {
         const auto& p = model_.project();
@@ -131,7 +137,7 @@ void MainComponent::mouseDown(const juce::MouseEvent& e) {
     if (int i = hitTabs(mainStrip_, {"Session", "Arrangement", "Mixer"}); i >= 0) {
         showMain(MainTab(i));
         if (MainTab(i) != MainTab::Mixer) { model_.setArrangementMode(MainTab(i) == MainTab::Arrangement); model_.notify(app::ModelEvent::Transport); }
-    } else if (int j = hitTabs(detailStrip_, {"Clip", "Devices", "Input", "Modulation"}); j >= 0) showDetail(DetailTab(j));
+    } else if (int j = hitTabs(detailStrip_, {"Clip", "Devices", "Input", "Modulation", "Audio-rate", "Morph"}); j >= 0) showDetail(DetailTab(j));
 }
 
 void MainComponent::mouseDrag(const juce::MouseEvent& e) {

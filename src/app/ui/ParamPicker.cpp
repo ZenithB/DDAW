@@ -41,7 +41,7 @@ juce::String describeTarget(const project::Track& t, const project::ModTarget& m
     return dev + " " + p;
 }
 
-void pickParam(app::AppModel& model, project::Uid track, juce::Component* anchor, std::function<void(const PickedParam&)> done) {
+void pickParam(app::AppModel& model, project::Uid track, juce::Component* anchor, std::function<void(const PickedParam&)> done, bool audioRateOnly) {
     const auto* t = app::edit::findTrack(model.project(), track);
     if (!t) return;
     auto choices = std::make_shared<std::vector<PickedParam>>();
@@ -52,19 +52,23 @@ void pickParam(app::AppModel& model, project::Uid track, juce::Component* anchor
         if (!info || info->params.empty()) return;
         juce::PopupMenu sub;
         for (const auto& ps : info->params) {
+            if (audioRateOnly && !ps.audioRate) continue;
             auto it = d.params.find(ps.key);
             PickedParam pp{dest, fxId, ps.key, app::paramLabel(ps.key) + " (" + info->label + ")", ps, it != d.params.end() ? it->second : double(ps.def)};
             sub.addItem(id++, app::paramLabel(ps.key));
             choices->push_back(pp);
         }
-        menu.addSubMenu(title, sub);
+        if (sub.getNumItems() > 0) menu.addSubMenu(title, sub);
     };
     if (!t->inst.type.empty() && t->kind != project::TrackKind::Bus) addDevice("Instrument: " + juce::String(t->inst.type), app::Chain::Instrument, t->inst, "inst", "inst");
     for (const auto& d : t->fx) addDevice(juce::String(d.id), app::Chain::Effect, d, "fx", d.id);
-    juce::PopupMenu mix;
-    mix.addItem(id++, "Volume"); choices->push_back({"mix", "", "gain", "Volume", kGain, t->gainDb});
-    mix.addItem(id++, "Pan"); choices->push_back({"mix", "", "pan", "Pan", kPan, t->pan});
-    menu.addSubMenu("Mixer", mix);
+    if (!audioRateOnly) {
+        juce::PopupMenu mix;
+        mix.addItem(id++, "Volume"); choices->push_back({"mix", "", "gain", "Volume", kGain, t->gainDb});
+        mix.addItem(id++, "Pan"); choices->push_back({"mix", "", "pan", "Pan", kPan, t->pan});
+        menu.addSubMenu("Mixer", mix);
+    }
+    if (audioRateOnly && menu.getNumItems() == 0) menu.addItem(-1, "No audio-rate parameters on this track", false);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(anchor), [choices, done = std::move(done)](int r) {
         if (r >= 1 && size_t(r) <= choices->size() && done) done((*choices)[size_t(r - 1)]);
     });

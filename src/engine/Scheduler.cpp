@@ -80,7 +80,7 @@ std::optional<double> TrackSched::peek(TransportMode mode, double now, const Sch
             vel = std::clamp(vel + float((rng.nextF64() * 2.0 - 1.0) * 0.1 * p.humanize), 0.02f, 1.0f);
         }
         if (fire < now) fire = now;  // a negative jitter never schedules into the past
-        pending_ = Pending{fire, ev.pitch, ev.durTicks, vel, true};
+        pending_ = Pending{fire, ev.pitch, ev.durTicks, vel, true, ev.expr};
         return fire;
     }
     // Pathological pattern: park a silent marker one loop ahead.

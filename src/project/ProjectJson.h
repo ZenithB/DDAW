@@ -24,6 +24,12 @@ nlohmann::json macroToJson(const MacroSpec& m);
 MacroSpec macroFromJson(const nlohmann::json& j);
 nlohmann::json perfToJson(const PerfSpec& p);
 PerfSpec perfFromJson(const nlohmann::json& j);
+nlohmann::json arateToJson(const ARateSpec& r);
+ARateSpec arateFromJson(const nlohmann::json& j);
+nlohmann::json bindingToJson(const ControlBinding& b);
+ControlBinding bindingFromJson(const nlohmann::json& j);
+nlohmann::json morphToJson(const MorphSpec& m);
+MorphSpec morphFromJson(const nlohmann::json& j);
 nlohmann::json pointsToJson(const std::vector<AutoPoint>& pts);
 std::vector<AutoPoint> pointsFromJson(const nlohmann::json& j);
 

@@ -8,8 +8,6 @@
 
 namespace ddaw::ui {
 
-inline const project::Track* trackOf(app::AppModel& m, project::Uid uid) { return app::edit::findTrack(m.project(), uid); }
-
 // Modulation of the selected track: LFOs, macros, and automation lanes (the track's timeline lanes, or the
 // envelopes of the open clip) with a breakpoint editor. Knobs for LFO depth / rate and macro values are live;
 // structural edits (shape, sync, targets) go through the document and rebuild the graph.
@@ -29,7 +27,7 @@ public:
     int macroRows() const { return int(macroRows_.size()); }
     LaneEditor& lanes() { return *lanes_; }
 
-    static constexpr int kRowH = 62, kLeftW = 440, kMacroW = 330, kHeaderH = 30;
+    static constexpr int kRowH = 62, kLeftW = 440, kMacroW = 450, kHeaderH = 30;
 
 private:
     void rebuild();

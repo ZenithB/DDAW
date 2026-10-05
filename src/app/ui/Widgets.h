@@ -15,6 +15,7 @@ public:
     std::function<void(bool)> onToggle;
     void setToggleable(bool t) { toggleable_ = t; }
     void setText(juce::String t) { text_ = std::move(t); repaint(); }
+    const juce::String& text() const { return text_; }
     void setOn(bool on) { if (on != state_) { state_ = on; repaint(); } }
     bool isOn() const { return state_; }
     void setOnColour(juce::Colour c) { on_ = c; repaint(); }

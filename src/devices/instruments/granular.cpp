@@ -19,6 +19,7 @@
 #include "core/Constants.h"
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
+#include "dsp/NoteExpr.h"
 
 namespace ddaw::devices {
 namespace {
@@ -81,6 +82,7 @@ struct Voice {
     double spawnNext = 0.0;  // elapsed time of the next grain
     std::array<uint32_t, kMaxIds> ids{};
     int numIds = 0;
+    dsp::NoteExpr ex;        // MPE: bend retunes the grains spawned from now on, pressure the level
 };
 
 struct Grain {
@@ -157,6 +159,13 @@ public:
         v.numIds = 1;
     }
 
+    void noteExpression(uint32_t noteId, int dimension, float value) override {
+        for (auto& v : voices_) {
+            if (!v.active) continue;
+            for (int k = 0; k < v.numIds; ++k) if (v.ids[static_cast<size_t>(k)] == noteId) { v.ex.set(dimension, value); break; }
+        }
+    }
+
     void noteOff(uint32_t noteId) override {
         for (auto& v : voices_) {
             if (!v.active || v.releasing) continue;
@@ -206,7 +215,7 @@ private:
 
         const double size = std::clamp(size_, 0.02f, 0.5f);
         const float p = static_cast<float>(voices_[vi].pitch);
-        const double rate = std::pow(2.0f, (p - 60.0f + pitch_ + rng_.nextPm1() * pjit_) / 12.0f);
+        const double rate = std::pow(2.0f, (p - 60.0f + pitch_ + voices_[vi].ex.bendS + rng_.nextPm1() * pjit_) / 12.0f);
         double offset = static_cast<double>(pos_) * bufDur + static_cast<double>(rng_.nextPm1()) * spray_ * bufDur * 0.5;
         const bool rev = rng_.nextF32() < rev_;
         if (rev) offset = bufDur - offset - size * rate;
@@ -246,7 +255,8 @@ private:
             lvl = v.vel;
         }
         v.elapsed += 1.0;
-        out = lvl;
+        v.ex.step();
+        out = lvl * v.ex.gain();
         return true;
     }
 

@@ -49,6 +49,7 @@ public:
     void setParam(uint16_t index, float value) override;
     void noteOn(uint8_t pitch, float velocity, uint32_t noteId) override;
     void noteOff(uint32_t noteId) override;
+    void noteExpression(uint32_t noteId, int dimension, float value) override;   // MPE: bend (semitones), pressure (loudness), slide (vibrato depth)
     void performance(const PerformanceFrame& f) override;
     void process(float* l, float* r, int n, const ProcessContext& ctx, const ModInputs&) override;
     void reset() override;
@@ -104,6 +105,8 @@ private:
     int64_t perfAge_ = int64_t(1) << 40;
     // note mode
     bool noteHeld_ = false;
+    uint32_t noteId_ = 0;
+    float bend_ = 0.0f, pressure_ = 0.0f, slide_ = 0.0f;   // expression of the held note
     float noteHz_ = 0, curHz_ = 0, ldCur_ = -80.0f, ldTarget_ = -80.0f, vibPhase_ = 0;
 };
 

@@ -30,7 +30,7 @@ public:
         if (info_) {
             for (size_t i = 0; i < info_->params.size(); ++i) {
                 const auto& spec = info_->params[i];
-                auto k = std::make_unique<Knob>(spec, app::paramLabel(spec.key), accent());
+                auto k = std::make_unique<Knob>(spec, app::paramLabel(spec.key), spec.audioRate ? col::meterMid : accent());   // audio-rate ports stand out
                 const int r = int(i) % rows, c = int(i) / rows;
                 k->setBounds(kPad + c * kKnobW, kPanelHeader + 4 + r * kKnobH, kKnobW, kKnobH);
                 const std::string key = spec.key;

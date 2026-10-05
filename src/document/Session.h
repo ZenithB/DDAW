@@ -14,6 +14,8 @@ public:
     // Apply an edit and route its effect to the engine. Returns the change report. Throws
     // std::invalid_argument for a bad command (nothing changes).
     ChangeInfo apply(const Command& c);
+    // Like apply, but not an undo step (streaming controller values).
+    ChangeInfo applyTransient(const Command& c);
     ChangeInfo undo();
     ChangeInfo redo();
     // A group of edits is one undo step; its merged effect reaches the engine at endGroup.

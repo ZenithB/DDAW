@@ -8,6 +8,7 @@
 
 #include "devices/instruments/follow.h"
 #include "dsp/Math.h"
+#include "dsp/NoteExpr.h"
 #include "dsp/PolyBlepOsc.h"
 #include "dsp/Smoother.h"
 
@@ -46,7 +47,9 @@ public:
         if (voiced_) targetHz_ = f.f0Hz;
         targetAmp_ = voiced_ ? std::min(1.0f, f.envelope * 2.0f) : 0.0f;
     }
-    void noteOn(uint8_t pitch, float velocity, uint32_t) override { noteHz_ = midiHz(float(pitch)); noteAmp_ = velocity; noteHeld_ = true; }
+    void noteOn(uint8_t pitch, float velocity, uint32_t id) override { noteHz_ = midiHz(float(pitch)); noteAmp_ = velocity; noteHeld_ = true; noteId_ = id; ex_.clear(); }
+    // MPE (note mode only; a tracked voice is the performance): bend (semitones) and pressure (up to +50% level).
+    void noteExpression(uint32_t id, int dimension, float value) override { if (id == noteId_) ex_.set(dimension, value); }
     void noteOff(uint32_t) override { noteHeld_ = false; }
 
     void process(float* l, float* r, int n, const ProcessContext&, const ModInputs&) override {
@@ -61,13 +64,14 @@ public:
                 if (curHz_ <= 0.0f) curHz_ = hz;
                 const float g = 1.0f - std::exp(-1.0f / (0.001f * glideMs * sr_));
                 curHz_ += (hz - curHz_) * g;
-                osc_.setFreq(curHz_ * std::pow(2.0f, float(octave_)));
+                ex_.step();
+                osc_.setFreq(curHz_ * std::pow(2.0f, float(octave_)) * (tracked ? 1.0f : ex_.pitchFactor()));
             }
             // attack 5 ms, release by parameter
             const float a = amp > curAmp_ ? 1.0f - std::exp(-1.0f / (0.005f * sr_)) : 1.0f - std::exp(-1.0f / (0.001f * relMs * sr_));
             curAmp_ += (amp - curAmp_) * a;
             if (curAmp_ < 1e-5f && amp == 0.0f) { curAmp_ = 0.0f; continue; }
-            const float s = osc_.next() * curAmp_ * 0.5f;
+            const float s = osc_.next() * curAmp_ * 0.5f * (tracked ? 1.0f : ex_.gain());
             l[i] += s;
             r[i] += s;
         }
@@ -87,6 +91,8 @@ private:
     Smoother level_, gate_, release_, glide_;
     int octave_ = 0, perfAge_ = 1 << 30;
     bool voiced_ = false, noteHeld_ = false;
+    uint32_t noteId_ = 0;
+    dsp::NoteExpr ex_;
     float targetHz_ = 0, noteHz_ = 0, curHz_ = 0, targetAmp_ = 0, noteAmp_ = 0, curAmp_ = 0;
 };
 

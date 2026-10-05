@@ -1,5 +1,7 @@
 #include "app/model/Stress.h"
 
+#include "app/model/Controllers.h"
+
 #include <cmath>
 #include <filesystem>
 
@@ -36,6 +38,35 @@ void buildStressProject(AppModel& model, double sr) {
         model.apply({"inst.set", {{"track", samplerUid}, {"device", project::deviceToJson(d, true)}}});
         project::Clip n; n.len = 384; project::Note x; x.pitch = 60; x.durTicks = 96; n.notes = {x};
         model.apply({"clip.set", {{"track", samplerUid}, {"scene", p.scenes[0]}, {"clip", project::clipToJson(n)}}});
+    }
+    {   // audio-rate modulation: an FM Operators track whose amp is driven by an oscillator and whose index follows the bass
+        model.apply(edit::addTrack(model.project(), project::TrackKind::Synth, "FM Ops"));
+        const auto uid = model.project().tracks.back().uid;
+        model.apply(edit::setInstrument(model.project(), uid, "fmop"));
+        project::Clip n; n.len = 384;
+        for (int i = 0; i < 4; ++i) {   // each note carries expression curves, so playback exercises them
+            project::Note x; x.pitch = 48 + 3 * i; x.startTicks = 96.0 * i; x.durTicks = 90;
+            x.bend = {{0, 0.0}, {45, 1.5 + i}, {90, 0.0}};
+            x.pressure = {{0, 0.0}, {60, 0.8}};
+            if (i % 2) x.slide = {{0, 0.2}, {90, 1.0}};
+            n.notes.push_back(x);
+        }
+        model.apply({"clip.set", {{"track", uid}, {"scene", model.project().scenes[0]}, {"clip", project::clipToJson(n)}}});
+        project::ARateSpec am; am.id = "am"; am.source = "osc"; am.hz = 6.0; am.depth = 0.4; am.target = {"inst", "inst", "amp"};
+        project::ARateSpec fol; fol.id = "fol"; fol.source = "track"; fol.srcTrack = model.project().tracks[1].id; fol.follow = true; fol.depth = 0.5; fol.target = {"inst", "inst", "index"};
+        model.apply({"arate.insert", {{"track", uid}, {"index", 0}, {"arate", project::arateToJson(am)}}});
+        model.apply({"arate.insert", {{"track", uid}, {"index", 1}, {"arate", project::arateToJson(fol)}}});
+        // a morph map moving the index, a ratio and a level, with a gamepad and a CC bound to its stick
+        const auto id = edit::findTrack(model.project(), uid)->id;
+        project::MorphSpec mm; mm.name = "Timbre"; mm.x = 0.4; mm.y = 0.6;
+        mm.targets = {{"inst", "inst", "index"}, {"inst", "inst", "r2"}, {"inst", "inst", "l2"}};
+        mm.curves = {1.0, 1.0, 0.7};
+        mm.anchors = {{"a", 0.1, 0.1, {0.1, 0.3, 0.2}}, {"b", 0.9, 0.2, {0.6, 0.8, 0.7}}, {"c", 0.5, 0.9, {0.9, 0.5, 0.9}}};
+        model.apply({"morph.insert", {{"track", uid}, {"index", 0}, {"morph", project::morphToJson(mm)}}});
+        project::ControlBinding bx; bx.source = "pad:lx"; bx.target = morphTarget(id, 0, 'x');
+        project::ControlBinding by; by.source = "midi:cc74"; by.target = morphTarget(id, 0, 'y');
+        model.apply({"binding.insert", {{"index", 0}, {"binding", project::bindingToJson(bx)}}});
+        model.apply({"binding.insert", {{"index", 1}, {"binding", project::bindingToJson(by)}}});
     }
     if (instrumentRegistered("ddsp")) {   // the neural instrument, under the same abuse
         model.apply(edit::addTrack(model.project(), project::TrackKind::Synth, "Violin"));

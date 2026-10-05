@@ -33,7 +33,7 @@ float sample(const std::vector<int>& notes, double t) {
 
 }  // namespace
 
-TEST_CASE("polyphonic audio input: a chord in becomes a chord out, and it stops when the sound does", "[polyinput][engine]") {
+TEST_CASE("polyphonic audio input: a chord in becomes a chord out, and it stops when the sound does", "[polyinput][engine][threads]") {
     Engine e;
     e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::Bypass, 0});
     e.setInitialGraph(buildGraph(project::importFixtureJson(kProj), kSr, 1).graph);
@@ -88,7 +88,7 @@ TEST_CASE("polyphonic audio input: a chord in becomes a chord out, and it stops 
     while (auto old = e.takeRetired()) {}
 }
 
-TEST_CASE("polyphonic audio input: nothing plays from noise, and stopping releases held notes", "[polyinput][engine]") {
+TEST_CASE("polyphonic audio input: nothing plays from noise, and stopping releases held notes", "[polyinput][engine][threads]") {
     Engine e;
     e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::Bypass, 0});
     e.setInitialGraph(buildGraph(project::importFixtureJson(kProj), kSr, 1).graph);

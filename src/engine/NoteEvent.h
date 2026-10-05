@@ -11,6 +11,7 @@ struct NoteEv {
     double durTicks = 0;
     float vel = 1.0f;
     float pr = 1.0f;  // probability that the note fires, rolled at fire time
+    int32_t expr = -1;  // index of the note's expression curves in the graph's table (-1: none)
 };
 
 // Deterministic xorshift64*: humanise/probability/arp-random rolls must repeat across runs.

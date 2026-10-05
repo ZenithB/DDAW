@@ -226,7 +226,29 @@ void AppModel::syncEngine() {
     }
 }
 
+void AppModel::applyZones(int lower, int upper) {
+    lower = std::clamp(lower, 0, 15);
+    upper = std::clamp(upper, 0, 15 - lower);   // the zones cannot overlap
+    mpeLower_ = lower;
+    mpeUpper_ = upper;
+}
+
+void AppModel::midiConfigureMpe(int masterChannel, int members) {
+    members = std::clamp(members, 0, 15);
+    if (masterChannel == 1) applyZones(members, mpeUpper_.load());
+    else if (masterChannel == 16) applyZones(mpeLower_.load(), members);
+    else return;
+    mpe_ = mpeLower_.load() > 0 || mpeUpper_.load() > 0;
+    midiConfigChanged_ = true;
+}
+
+void AppModel::midiSetBendRange(bool memberChannel, float semitones) {
+    if (memberChannel) mpeRange_ = std::clamp(semitones, 1.0f, 96.0f); else bendRange_ = std::clamp(semitones, 1.0f, 96.0f);
+    midiConfigChanged_ = true;
+}
+
 void AppModel::tick() {
+    if (midiConfigChanged_.exchange(false)) notify(ModelEvent::Recording);   // an MPE / bend-range message arrived: refresh the UI, save the settings
     syncEngine();
     if (recording_) recording_->poll();
 }

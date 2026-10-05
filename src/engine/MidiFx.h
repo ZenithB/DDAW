@@ -19,8 +19,9 @@ struct MidiFxContext {
 };
 
 // Expand `notes` through `chain` (disabled devices are skipped, unknown types pass through) and
-// flatten to events sorted by tick. An empty chain is the identity.
+// flatten to events sorted by tick. An empty chain is the identity. `exprOf` (optional, parallel to `notes`) gives each
+// note's expression-curve index; it travels with the note through the effects (chord tones share it; arpeggio notes have none).
 std::vector<NoteEv> expandMidi(const std::vector<project::DeviceSpec>& chain,
-                               const std::vector<project::Note>& notes, const MidiFxContext& ctx);
+                               const std::vector<project::Note>& notes, const MidiFxContext& ctx, const std::vector<int>* exprOf = nullptr);
 
 }  // namespace ddaw::engine

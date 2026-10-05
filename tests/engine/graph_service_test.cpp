@@ -79,7 +79,7 @@ bool waitFor(const std::function<bool()>& f, int ms = 3000) {
 
 }  // namespace
 
-TEST_CASE("buildNow installs the first graph and publishes a matching resolver", "[service]") {
+TEST_CASE("buildNow installs the first graph and publishes a matching resolver", "[service][threads]") {
     Engine e; e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::Bypass, 0});
     GraphService svc(e, kSr);
     svc.buildNow(proj(0.1));
@@ -94,7 +94,7 @@ TEST_CASE("buildNow installs the first graph and publishes a matching resolver",
     CHECK_THROWS(svc.buildNow(tooManyTracks()));              // more tracks than the engine supports
 }
 
-TEST_CASE("a snapshot submitted while audio runs swaps in with no audio-thread allocation", "[service][realtime]") {
+TEST_CASE("a snapshot submitted while audio runs swaps in with no audio-thread allocation", "[service][threads][realtime]") {
     Engine e; e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::Bypass, 0});
     GraphService svc(e, kSr);
     svc.buildNow(proj(0.1));
@@ -120,7 +120,7 @@ TEST_CASE("a snapshot submitted while audio runs swaps in with no audio-thread a
     CHECK(svc.stats().builds == 3);                                            // buildNow + two submissions
 }
 
-TEST_CASE("a burst of edits coalesces into few builds, and the last one wins", "[service]") {
+TEST_CASE("a burst of edits coalesces into few builds, and the last one wins", "[service][threads]") {
     Engine e; e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::Bypass, 0});
     GraphService svc(e, kSr);
     svc.buildNow(proj(0.1));
@@ -137,7 +137,7 @@ TEST_CASE("a burst of edits coalesces into few builds, and the last one wins", "
     CHECK(audio.level() == Catch::Approx(3.5f * base).epsilon(0.1));          // the newest snapshot (0.35 / 0.1)
 }
 
-TEST_CASE("a build failure keeps the previous graph live and is reported", "[service]") {
+TEST_CASE("a build failure keeps the previous graph live and is reported", "[service][threads]") {
     Engine e; e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::Bypass, 0});
     GraphService svc(e, kSr);
     svc.buildNow(proj(0.1));
@@ -153,7 +153,7 @@ TEST_CASE("a build failure keeps the previous graph live and is reported", "[ser
     REQUIRE(waitFor([&] { return !svc.busy(); }));
 }
 
-TEST_CASE("session: parameter edits go live without a rebuild; structural edits rebuild; undo restores", "[service][session]") {
+TEST_CASE("session: parameter edits go live without a rebuild; structural edits rebuild; undo restores", "[service][threads][session]") {
     Engine e; e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::Bypass, 0});
     GraphService svc(e, kSr);
     Document doc(proj(0.1));
@@ -195,7 +195,7 @@ TEST_CASE("session: parameter edits go live without a rebuild; structural edits 
     CHECK(audio.allocations.load() == 0);
 }
 
-TEST_CASE("session: a parameter edit made while a rebuild is in flight is not lost", "[service][session]") {
+TEST_CASE("session: a parameter edit made while a rebuild is in flight is not lost", "[service][threads][session]") {
     Engine e; e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::Bypass, 0});
     GraphService svc(e, kSr);
     Document doc(proj(0.1));

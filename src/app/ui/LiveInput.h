@@ -7,6 +7,9 @@
 // so shortcuts keep working.
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <array>
+#include <atomic>
+#include <functional>
 #include <map>
 #include <set>
 
@@ -24,6 +27,10 @@ public:
     juce::StringArray deviceNames() const;
     int openCount() const { return int(open_.size()); }
     void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage&) override;   // MIDI thread
+
+    // Controller values seen on the MIDI inputs, for bindings: poll from the UI thread; `emit` gets "midi:cc<N>" (0..1),
+    // "midi:bend" and "midi:pressure" for each one that changed since the last poll.
+    void pollControllers(const std::function<void(const std::string&, double)>& emit);
 
     // The computer keyboard.
     void setKeyboardEnabled(bool on);
@@ -45,6 +52,17 @@ private:
     std::vector<std::unique_ptr<juce::MidiInput>> open_;
     std::set<int> held_;            // key codes currently sounding a note
     std::map<int, int> sounding_;   // key code -> pitch it started (an octave change must not strand a note)
+    std::array<std::atomic<int>, 128> cc_;     // last value of each controller, -1 until seen (written by the MIDI thread)
+    std::array<int, 128> ccSent_;
+    std::atomic<int> bend_{-1}, pressure_{-1};
+    // MPE: the note sounding on each member channel (1-16; -1 none) and the channel's latest expression, so the values a
+    // controller sends before a note-on shape the note from its first sample.
+    std::array<std::atomic<int>, 17> chanNote_;
+    std::array<std::atomic<float>, 17> chanBend_, chanSlide_, chanPress_;
+    // Registered-parameter state per channel (MIDI thread): the selected RPN and the data entry bytes
+    std::array<int, 17> rpnMsb_, rpnLsb_, dataMsb_, dataLsb_;
+    void handleRpnData(int ch);
+    int bendSent_ = -1, pressureSent_ = -1;
     bool keys_ = false;
     int octave_ = 4;
     float velocity_ = 0.8f;

@@ -238,7 +238,9 @@ void DdspInstrument::performance(const PerformanceFrame& f) {
     pushFeature(f.loudnessDb, f.f0Hz > 0.0f ? f.f0Hz * shift : 0.0f);
 }
 
-void DdspInstrument::noteOn(uint8_t pitch, float velocity, uint32_t) {
+void DdspInstrument::noteOn(uint8_t pitch, float velocity, uint32_t noteId) {
+    noteId_ = noteId;
+    bend_ = pressure_ = slide_ = 0.0f;   // expression belongs to a note: a new note starts neutral
     noteHz_ = dsp::midiHz(float(std::clamp(int(pitch) + transpose_, 0, 127)));
     ldTarget_ = -55.0f + 37.0f * std::clamp(velocity, 0.0f, 1.0f);   // velocity 1 -> -18 dB, the loudest the models heard
     if (!noteHeld_ || curHz_ <= 0.0f) curHz_ = noteHz_;              // legato glides, a fresh note starts on pitch
@@ -247,18 +249,26 @@ void DdspInstrument::noteOn(uint8_t pitch, float velocity, uint32_t) {
 
 void DdspInstrument::noteOff(uint32_t) { noteHeld_ = false; }
 
+void DdspInstrument::noteExpression(uint32_t noteId, int dimension, float value) {
+    if (noteId != noteId_) return;
+    if (dimension == 2) bend_ = std::clamp(value, -24.0f, 24.0f);
+    else if (dimension == 1) pressure_ = std::clamp(value, 0.0f, 1.0f);
+    else if (dimension == 0) slide_ = std::clamp(value, 0.0f, 1.0f);
+}
+
 void DdspInstrument::noteFrame() noexcept {
     // 250 Hz envelope for notes: loudness slews linearly in dB (attack = time from silence to the target),
     // pitch glides over ~20 ms, vibrato fades in with the loudness
     const float hopMs = 4.0f;
-    if (noteHeld_) ldCur_ = std::min(ldTarget_, ldCur_ + hopMs * (ldTarget_ - kSilenceDb) / attackMs_);
+    const float target = std::min(ldTarget_ + 6.0f * pressure_, 0.0f);    // pressure: up to 6 dB louder
+    if (noteHeld_) ldCur_ = std::min(target, ldCur_ + hopMs * (target - kSilenceDb) / attackMs_);
     else ldCur_ = std::max(kSilenceDb, ldCur_ - hopMs * 60.0f / releaseMs_);
     const bool on = ldCur_ > kSilenceDb + 0.5f;
     if (curHz_ > 0.0f && noteHz_ > 0.0f) curHz_ += (noteHz_ - curHz_) * (1.0f - std::exp(-hopMs / 20.0f));
     vibPhase_ += 2.0f * 3.14159265f * 5.5f * hopMs * 0.001f;
     if (vibPhase_ > 6.2831853f) vibPhase_ -= 6.2831853f;
-    const float depth = vibratoCents_ * std::clamp((ldCur_ - kSilenceDb) / 30.0f, 0.0f, 1.0f);
-    const float hz = curHz_ * std::pow(2.0f, depth * std::sin(vibPhase_) / 1200.0f);
+    const float depth = vibratoCents_ * (1.0f + 3.0f * slide_) * std::clamp((ldCur_ - kSilenceDb) / 30.0f, 0.0f, 1.0f);   // slide: up to 4x the vibrato
+    const float hz = curHz_ * std::pow(2.0f, depth * std::sin(vibPhase_) / 1200.0f + bend_ / 12.0f);
     pushFeature(on ? ldCur_ : kSilenceDb, on ? hz : 0.0f);
 }
 

@@ -7,6 +7,7 @@
 // Everything here is allocation-free after the patterns are built (builder thread).
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "engine/NoteEvent.h"
@@ -43,6 +44,7 @@ struct Pending {
     // False for the placeholder that bounds peek() work when a pathological pattern (every note
     // failing its probability roll) never yields a firing note.
     bool audible = true;
+    int32_t expr = -1;  // the note's expression curves (see NoteEv)
 };
 
 class TrackSched {

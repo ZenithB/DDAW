@@ -126,7 +126,7 @@ TEST_CASE("live notes: records carry the timeline tick, and the drum track plays
     CHECK(n.tick == Approx(51.2).margin(2.7));      // within one chunk (2.7 ticks)
 }
 
-TEST_CASE("live notes: a storm of keys from several threads allocates nothing and loses nothing it can keep", "[livenotes][engine][rt]") {
+TEST_CASE("live notes: a storm of keys from several threads allocates nothing and loses nothing it can keep", "[livenotes][engine][rt][threads]") {
     Rig r;
     std::thread a([&] { for (int i = 0; i < 300; ++i) { r.e.liveNote(Engine::LiveKind::NoteOn, 40 + i % 40, 0.6f); std::this_thread::sleep_for(std::chrono::microseconds(50)); r.e.liveNote(Engine::LiveKind::NoteOff, 40 + i % 40); } });
     std::thread b([&] { for (int i = 0; i < 300; ++i) { r.e.liveNote(Engine::LiveKind::NoteOn, 60 + i % 30, 0.6f); std::this_thread::sleep_for(std::chrono::microseconds(70)); r.e.liveNote(Engine::LiveKind::NoteOff, 60 + i % 30); } });

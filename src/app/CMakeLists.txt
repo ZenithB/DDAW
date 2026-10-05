@@ -12,7 +12,13 @@ target_link_libraries(ddaw_audiotest PRIVATE ddaw_audiohost juce::juce_recommend
 
 # The views (JUCE components). Picked up by glob so adding a view never touches this file.
 file(GLOB DDAW_UI_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cpp)
+if(APPLE)
+    list(APPEND DDAW_UI_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/platform/Gamepad.mm)
+endif()
 add_library(ddaw_ui STATIC ${DDAW_UI_SOURCES})
+if(APPLE)
+    target_link_libraries(ddaw_ui PUBLIC "-framework GameController" "-framework CoreHaptics")
+endif()
 target_include_directories(ddaw_ui PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(ddaw_ui PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(ddaw_ui

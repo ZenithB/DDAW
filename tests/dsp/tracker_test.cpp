@@ -243,7 +243,7 @@ TEST_CASE("tracker never allocates after prepare", "[tracker][rt]") {
     CHECK(guard.count() == 0);
 }
 
-TEST_CASE("tracker cost: CPU per callback at 64 frames", "[tracker][cost]") {
+TEST_CASE("tracker cost: CPU per callback at 64 frames", "[tracker][cost][timing]") {
     PerformanceTracker t;
     t.prepare(48000.0);
     std::vector<float> x(48000);

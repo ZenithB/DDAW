@@ -11,6 +11,10 @@ const std::pair<int, int> kMap[] = {{'a', 0}, {'w', 1}, {'s', 2}, {'e', 3}, {'d'
 }
 
 LiveInput::LiveInput(app::AppModel& m) : model_(m) {
+    for (auto& c : cc_) c = -1;
+    rpnMsb_.fill(127); rpnLsb_.fill(127); dataMsb_.fill(0); dataLsb_.fill(0);
+    for (size_t i = 0; i < chanNote_.size(); ++i) { chanNote_[i] = -1; chanBend_[i] = 0.0f; chanSlide_[i] = 0.0f; chanPress_[i] = 0.0f; }
+    ccSent_.fill(-1);
     refreshDevices();
     startTimer(2500);
 }
@@ -45,10 +49,76 @@ juce::StringArray LiveInput::deviceNames() const {
 
 void LiveInput::handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& msg) {
     // runs on the MIDI thread: the model's note calls only touch the engine's thread-safe live queue
-    if (msg.isNoteOn()) model_.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
-    else if (msg.isNoteOff()) model_.noteOff(msg.getNoteNumber());
-    else if (msg.isController() && msg.getControllerNumber() == 64) model_.sustain(msg.getControllerValue() >= 64);
-    else if (msg.isAllNotesOff() || msg.isAllSoundOff()) model_.allNotesOff();
+    const int ch = std::clamp(msg.getChannel(), 1, 16);
+    const bool member = model_.mpeMember(ch);          // an MPE member channel: one note at a time, with its own expression
+    if (msg.isNoteOn()) {
+        const int p = msg.getNoteNumber();
+        if (member) {   // the channel's current expression first, so the note starts the way the performer is holding it
+            chanNote_[size_t(ch)] = p;
+            model_.noteExpression(p, 2, chanBend_[size_t(ch)]);
+            model_.noteExpression(p, 0, chanSlide_[size_t(ch)]);
+            model_.noteExpression(p, 1, chanPress_[size_t(ch)]);
+        }
+        model_.noteOn(p, msg.getFloatVelocity());
+    } else if (msg.isNoteOff()) {
+        if (member) chanNote_[size_t(ch)] = -1;
+        model_.noteOff(msg.getNoteNumber());
+    } else if (msg.isPitchWheel()) {
+        const float norm = float(msg.getPitchWheelValue() - 8192) / 8192.0f;
+        bend_ = msg.getPitchWheelValue();
+        if (member) {
+            const float semis = norm * model_.mpeRange();
+            chanBend_[size_t(ch)] = semis;
+            if (const int p = chanNote_[size_t(ch)]; p >= 0) model_.noteExpression(p, 2, semis);
+        } else {
+            model_.bend(norm * model_.bendRange());   // a bend wheel, or the MPE master channel: every note
+        }
+    } else if (msg.isChannelPressure()) {
+        pressure_ = msg.getChannelPressureValue();
+        if (member) {
+            const float v = float(msg.getChannelPressureValue()) / 127.0f;
+            chanPress_[size_t(ch)] = v;
+            if (const int p = chanNote_[size_t(ch)]; p >= 0) model_.noteExpression(p, 1, v);
+        }
+    } else if (msg.isAftertouch()) {   // polyphonic key pressure: one note's pressure
+        model_.noteExpression(msg.getNoteNumber(), 1, float(msg.getAfterTouchValue()) / 127.0f);
+    } else if (msg.isController()) {
+        const int cc = msg.getControllerNumber();
+        cc_[size_t(cc & 127)] = msg.getControllerValue();
+        if (cc == 101) { rpnMsb_[size_t(ch)] = msg.getControllerValue(); dataLsb_[size_t(ch)] = 0; }
+        else if (cc == 100) { rpnLsb_[size_t(ch)] = msg.getControllerValue(); dataLsb_[size_t(ch)] = 0; }
+        else if (cc == 6) { dataMsb_[size_t(ch)] = msg.getControllerValue(); dataLsb_[size_t(ch)] = 0; handleRpnData(ch); }
+        else if (cc == 38) { dataLsb_[size_t(ch)] = msg.getControllerValue(); handleRpnData(ch); }
+        else if (cc == 64) model_.sustain(msg.getControllerValue() >= 64);
+        else if (cc == 74 && member) {   // slide
+            const float v = float(msg.getControllerValue()) / 127.0f;
+            chanSlide_[size_t(ch)] = v;
+            if (const int p = chanNote_[size_t(ch)]; p >= 0) model_.noteExpression(p, 0, v);
+        }
+    } else if (msg.isAllNotesOff() || msg.isAllSoundOff()) {
+        model_.allNotesOff();
+    }
+}
+
+// Data entry for the selected registered parameter: pitch bend sensitivity (RPN 0,0: semitones + cents) sets the member or
+// master range, and the MPE configuration message (RPN 0,6 on a master channel: the zone's number of member channels).
+void LiveInput::handleRpnData(int ch) {
+    const int msb = rpnMsb_[size_t(ch)], lsb = rpnLsb_[size_t(ch)];
+    if (msb == 0 && lsb == 0) {
+        const float semis = float(dataMsb_[size_t(ch)]) + float(dataLsb_[size_t(ch)]) / 100.0f;
+        if (semis >= 1.0f) model_.midiSetBendRange(model_.mpeMember(ch), semis);
+    } else if (msb == 0 && lsb == 6 && (ch == 1 || ch == 16)) {
+        model_.midiConfigureMpe(ch, dataMsb_[size_t(ch)]);
+    }
+}
+
+void LiveInput::pollControllers(const std::function<void(const std::string&, double)>& emit) {
+    for (size_t n = 0; n < cc_.size(); ++n) {
+        const int v = cc_[n].load();
+        if (v >= 0 && v != ccSent_[n]) { ccSent_[n] = v; emit("midi:cc" + std::to_string(n), double(v) / 127.0); }
+    }
+    if (const int b = bend_.load(); b >= 0 && b != bendSent_) { bendSent_ = b; emit("midi:bend", double(b) / 16383.0); }
+    if (const int p = pressure_.load(); p >= 0 && p != pressureSent_) { pressureSent_ = p; emit("midi:pressure", double(p) / 127.0); }
 }
 
 int LiveInput::pitchForKey(int keyCode) const {

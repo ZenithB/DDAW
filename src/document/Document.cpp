@@ -454,6 +454,49 @@ Document::Exec Document::execute(const Command& c) {
         else if (k == "perf.remove") { const json old = perfToJson(t.perf[idx]); t.perf.erase(t.perf.begin() + static_cast<std::ptrdiff_t>(idx)); ex.inverse = {"perf.insert", {{"track", t.uid}, {"index", idx}, {"perf", old}}}; }
         else { const json old = perfToJson(t.perf[idx]); t.perf[idx] = perfFromJson(need(a, "perf")); ex.inverse = {"perf.edit", {{"track", t.uid}, {"index", idx}, {"perf", old}}}; }
         ex.info = structuralChange();
+    } else if (k == "binding.insert" || k == "binding.remove" || k == "binding.edit") {
+        const bool ins = k == "binding.insert";
+        const size_t idx = indexArg(a, "index", p_.bindings.size(), ins);
+        if (ins) { p_.bindings.insert(p_.bindings.begin() + static_cast<std::ptrdiff_t>(idx), bindingFromJson(need(a, "binding"))); ex.inverse = {"binding.remove", {{"index", idx}}}; }
+        else if (k == "binding.remove") { const json old = bindingToJson(p_.bindings[idx]); p_.bindings.erase(p_.bindings.begin() + static_cast<std::ptrdiff_t>(idx)); ex.inverse = {"binding.insert", {{"index", idx}, {"binding", old}}}; }
+        else { const json old = bindingToJson(p_.bindings[idx]); p_.bindings[idx] = bindingFromJson(need(a, "binding")); ex.inverse = {"binding.edit", {{"index", idx}, {"binding", old}}}; }
+        // a binding changes how the app reads controllers, not what the engine renders: no change report
+    } else if (k == "morph.insert" || k == "morph.remove" || k == "morph.edit") {
+        Track& t = p_.tracks[trackIdx(uidArg(a, "track"))];
+        const bool ins = k == "morph.insert";
+        const size_t idx = indexArg(a, "index", t.morph.size(), ins);
+        if (ins) { t.morph.insert(t.morph.begin() + static_cast<std::ptrdiff_t>(idx), morphFromJson(need(a, "morph"))); ex.inverse = {"morph.remove", {{"track", t.uid}, {"index", idx}}}; }
+        else if (k == "morph.remove") { const json old = morphToJson(t.morph[idx]); t.morph.erase(t.morph.begin() + static_cast<std::ptrdiff_t>(idx)); ex.inverse = {"morph.insert", {{"track", t.uid}, {"index", idx}, {"morph", old}}}; }
+        else { const json old = morphToJson(t.morph[idx]); t.morph[idx] = morphFromJson(need(a, "morph")); ex.inverse = {"morph.edit", {{"track", t.uid}, {"index", idx}, {"morph", old}}}; }
+        ex.info = structuralChange();
+    } else if (k == "morph.pos") {
+        Track& t = p_.tracks[trackIdx(uidArg(a, "track"))];
+        const size_t idx = indexArg(a, "index", t.morph.size(), false);
+        MorphSpec& m = t.morph[idx];
+        const double x = std::clamp(need(a, "x").get<double>(), 0.0, 1.0), y = std::clamp(need(a, "y").get<double>(), 0.0, 1.0);
+        ex.inverse = {"morph.pos", {{"track", t.uid}, {"index", idx}, {"x", m.x}, {"y", m.y}}};
+        m.x = x; m.y = y;
+        ex.info.params.push_back({t.id + "|morph" + std::to_string(idx) + "|x", x});
+        ex.info.params.push_back({t.id + "|morph" + std::to_string(idx) + "|y", y});
+    } else if (k == "arate.insert" || k == "arate.remove" || k == "arate.edit") {
+        Track& t = p_.tracks[trackIdx(uidArg(a, "track"))];
+        const bool ins = k == "arate.insert";
+        const size_t idx = indexArg(a, "index", t.arate.size(), ins);
+        if (ins) { t.arate.insert(t.arate.begin() + static_cast<std::ptrdiff_t>(idx), arateFromJson(need(a, "arate"))); ex.inverse = {"arate.remove", {{"track", t.uid}, {"index", idx}}}; }
+        else if (k == "arate.remove") { const json old = arateToJson(t.arate[idx]); t.arate.erase(t.arate.begin() + static_cast<std::ptrdiff_t>(idx)); ex.inverse = {"arate.insert", {{"track", t.uid}, {"index", idx}, {"arate", old}}}; }
+        else { const json old = arateToJson(t.arate[idx]); t.arate[idx] = arateFromJson(need(a, "arate")); ex.inverse = {"arate.edit", {{"track", t.uid}, {"index", idx}, {"arate", old}}}; }
+        ex.info = structuralChange();
+    } else if (k == "arate.field") {
+        Track& t = p_.tracks[trackIdx(uidArg(a, "track"))];
+        const size_t idx = indexArg(a, "index", t.arate.size(), false);
+        const std::string f = need(a, "field").get<std::string>();
+        const double v = need(a, "value").get<double>();
+        ARateSpec& r = t.arate[idx];
+        double* slot = f == "depth" ? &r.depth : f == "hz" ? &r.hz : nullptr;
+        if (!slot) bad("arate.field is depth or hz");
+        ex.inverse = {"arate.field", {{"track", t.uid}, {"index", idx}, {"field", f}, {"value", *slot}}};
+        *slot = f == "depth" ? std::clamp(v, -1.0, 1.0) : std::clamp(v, 0.05, 12000.0);
+        ex.info.params.push_back({t.id + "|arate" + std::to_string(idx) + "|" + f, *slot});
     } else if (k == "macro.insert" || k == "macro.remove" || k == "macro.edit") {
         Track& t = p_.tracks[trackIdx(uidArg(a, "track"))];
         const bool ins = k == "macro.insert";
@@ -505,6 +548,12 @@ ChangeInfo Document::apply(const Command& c, Command* applied) {
     if (grouping_) group_.push_back(std::move(ex));
     else { undo_.push_back({ex.forward, ex.inverse, c.kind}); redo_.clear(); }
     return info;
+}
+
+ChangeInfo Document::applyTransient(const Command& c) {
+    Exec ex = execute(c);
+    bump();
+    return ex.info;
 }
 
 ChangeInfo Document::undo() {

@@ -16,7 +16,8 @@ add_executable(ddaw_tests
     test_dsp_util.cpp
     test_project_json.cpp
     document_test.cpp
-    app/appmodel_test.cpp)
+    app/appmodel_test.cpp
+    app/controllers_test.cpp)
 # One test file per device: tests/devices/<type>_test.cpp. Picked up automatically, so a device task
 # never edits this file.
 file(GLOB DDAW_DEVICE_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/devices/*_test.cpp)
@@ -32,7 +33,8 @@ target_sources(ddaw_tests PRIVATE ${DDAW_DSP_TESTS})
 target_link_libraries(ddaw_tests PRIVATE ddaw_harness ddaw_appmodel Catch2::Catch2WithMain)
 target_compile_definitions(ddaw_tests PRIVATE DDAW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 target_link_libraries(ddaw_tests PRIVATE nlohmann_json::nlohmann_json)
-catch_discover_tests(ddaw_tests)
+# Catch tags become ctest labels: `ctest -L timing` / `-LE timing` select the wall-clock-dependent tests.
+catch_discover_tests(ddaw_tests ADD_TAGS_AS_LABELS)
 
 if(DDAW_BUILD_APP)
     target_sources(ddaw_tests PRIVATE app/ui_test.cpp)
@@ -46,10 +48,10 @@ if(DDAW_BUILD_DDSP)
 endif()
 
 # Parity of every ported device against synthyy's goldens, gated on the Rust port's baseline scores.
-# Runs only when the fixtures were synced (scripts/sync_synthyy_fixtures.sh). Unported fixtures are
-# reported, not failed; add --strict to fail on them.
+# Runs only when the fixtures are present (committed under tests/fixtures/synthyy; scripts/sync_synthyy_fixtures.sh
+# refreshes them). --strict: all 37 are ported, so an unported or regressed fixture fails the build.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/synthyy/projects)
     add_test(NAME parity_synthyy
-             COMMAND ddaw_parity ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/synthyy --limiter tone --no-trim
+             COMMAND ddaw_parity ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/synthyy --limiter tone --no-trim --strict
                      --report ${CMAKE_BINARY_DIR}/parity-report.json)
 endif()

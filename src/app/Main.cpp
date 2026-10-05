@@ -81,6 +81,11 @@ private:
         app::AppSettings s;
         s.recording = model_->recording().settings();
         s.inputMode = int(host_->inputMode());
+        s.mpe = model_->mpe();
+        s.bendRange = model_->bendRange();
+        s.mpeRange = model_->mpeRange();
+        s.mpeLower = model_->mpeLowerMembers();
+        s.mpeUpper = model_->mpeUpperMembers();
         app::saveSettings(settingsPath().toStdString(), s);
     }
     // Connects the recording workflow to the audio device, restores the saved options, and keeps the
@@ -89,6 +94,10 @@ private:
         const auto saved = app::loadSettings(settingsPath().toStdString());
         model_->recording().settings() = saved.recording;
         host_->setInputMode(app::AudioHost::InputMode(saved.inputMode));
+        model_->setBendRange(saved.bendRange);
+        model_->setMpeRange(saved.mpeRange);
+        model_->setMpeZones(saved.mpeLower, saved.mpeUpper);
+        model_->setMpe(saved.mpe);
         app::RecordingEnv env;
         env.openInput = [this]() -> std::string { return host_->setInputEnabled(true).toStdString(); };
         env.inputLatencyFrames = [this] { return host_->inputLatencyFrames(); };

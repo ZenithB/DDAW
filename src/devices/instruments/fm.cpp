@@ -14,6 +14,7 @@
 #include "devices/schema/Schema.generated.h"
 #include "dsp/Adsr.h"
 #include "dsp/Math.h"
+#include "dsp/NoteExpr.h"
 #include "dsp/PolyBlepOsc.h"
 #include "dsp/Smoother.h"
 
@@ -40,6 +41,7 @@ struct Voice {
     bool held = false;
     uint64_t serial = 0;
     uint32_t id = 0;
+    NoteExpr ex;
 
     Voice() { modEnv.setAdsr(kModAttack, kModDecay, kModSustain, kModRelease); }
 
@@ -61,14 +63,16 @@ struct Voice {
     }
 
     float render(float harm, float modIdx, float invSr) {
-        modulator.setFreq(freq * harm);
+        ex.step();
+        const float f = freq * ex.pitchFactor();
+        modulator.setFreq(f * harm);
         // The modulator is a full Tone.Synth: osc * env * velocity * volume(-10 dB).
         const float m = modulator.next() * modEnv.next() * vel * kSynthVolumeGain;
-        const float step = std::clamp(freq * (1.0f + modIdx * m) * invSr, -0.5f, 0.5f);
+        const float step = std::clamp(f * (1.0f + modIdx * m) * invSr, -0.5f, 0.5f);
         const float s = std::sin(carrierPhase * static_cast<float>(2.0 * std::numbers::pi));
         carrierPhase += step;
         carrierPhase -= std::floor(carrierPhase);
-        return s * ampEnv.next() * vel * kSynthVolumeGain;
+        return s * ampEnv.next() * vel * kSynthVolumeGain * ex.gain();
     }
 };
 
@@ -120,6 +124,7 @@ public:
         v.vel = std::clamp(velocity, 0.0f, 1.0f);
         v.serial = serial;
         v.id = noteId;
+        v.ex.clear();
         v.held = true;
         v.ampEnv.noteOn();
         v.modEnv.noteOn();
@@ -128,6 +133,11 @@ public:
     void noteOff(uint32_t noteId) override {
         for (auto& v : voices_)
             if (v.held && v.id == noteId) v.release();
+    }
+
+    // MPE: bend (semitones) and pressure (up to +50% level); slide is unused.
+    void noteExpression(uint32_t noteId, int dimension, float value) override {
+        for (auto& v : voices_) if (v.active() && v.id == noteId) v.ex.set(dimension, value);
     }
 
     void process(float* l, float* r, int n, const ProcessContext&, const ModInputs&) override {

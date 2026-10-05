@@ -1,25 +1,33 @@
 name: ci
 on:
   push:
+    branches: [main]
   pull_request:
 
+# The gate: everything except the wall-clock timing tests, including the 37-fixture parity run against synthyy's goldens
+# (ctest `parity_synthyy`, --strict: a regression or an unported fixture fails). The timing tests are reported, not
+# blocking: a shared runner's scheduling noise is not a regression (they run again, serially, in nightly.yml).
 jobs:
-  macos:
+  test:
     runs-on: macos-14   # Apple Silicon
     steps:
       - uses: actions/checkout@v4
+      - name: No model weights in git (their terms are unconfirmed)
+        run: scripts/check_no_weights.sh
       - name: Install Ninja
         run: brew install ninja
       - name: Configure (core + tests; the JUCE app is built in a separate job)
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDDAW_BUILD_APP=OFF
       - name: Build
         run: cmake --build build
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
-      - name: Parity report (DDAW fixtures)
-        run: ./build/ddaw_parity tests/fixtures/ddaw --report build/parity-report.json
+      - name: Tests and parity (gate)
+        run: ctest --test-dir build -LE timing --output-on-failure -j4
       - uses: actions/upload-artifact@v4
+        if: always()
         with: { name: parity-report, path: build/parity-report.json }
+      - name: Timing tests (reported, not blocking)
+        continue-on-error: true
+        run: ctest --test-dir build -L timing --output-on-failure -j1
 
   app:
     runs-on: macos-14

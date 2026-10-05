@@ -100,6 +100,49 @@ PerfSpec perfSpec(const json& jp) {
     return ps;
 }
 
+MorphSpec morphSpec(const json& jm) {
+    MorphSpec m;
+    m.name = get<std::string>(jm, "name", "");
+    m.on = getBool(jm, "on", true);
+    m.x = get<double>(jm, "x", 0.5);
+    m.y = get<double>(jm, "y", 0.5);
+    m.method = get<std::string>(jm, "method", "idw");
+    m.power = get<double>(jm, "power", 2.0);
+    m.width = get<double>(jm, "width", 0.35);
+    if (auto tg = jm.find("targets"); tg != jm.end()) m.targets = modTargets(*tg);
+    if (auto c = jm.find("curves"); c != jm.end() && c->is_array()) for (auto& v : *c) m.curves.push_back(v.is_number() ? v.get<double>() : 1.0);
+    if (auto an = jm.find("anchors"); an != jm.end() && an->is_array())
+        for (auto& ja : *an) {
+            MorphAnchor a;
+            a.name = get<std::string>(ja, "name", "");
+            a.x = get<double>(ja, "x", 0.5);
+            a.y = get<double>(ja, "y", 0.5);
+            if (auto v = ja.find("values"); v != ja.end() && v->is_array()) for (auto& e : *v) a.values.push_back(e.is_number() ? e.get<double>() : 0.0);
+            m.anchors.push_back(std::move(a));
+        }
+    return m;
+}
+
+ARateSpec arateSpec(const json& ja) {
+    ARateSpec a;
+    a.id = get<std::string>(ja, "id", "");
+    a.on = getBool(ja, "on", true);
+    a.source = get<std::string>(ja, "source", "osc");
+    a.shape = static_cast<int>(get<double>(ja, "shape", 0));
+    a.hz = get<double>(ja, "hz", 220);
+    a.srcTrack = get<std::string>(ja, "track", "");
+    a.follow = getBool(ja, "follow", false);
+    a.attackMs = get<double>(ja, "attackMs", 5);
+    a.releaseMs = get<double>(ja, "releaseMs", 80);
+    a.depth = get<double>(ja, "depth", 0.5);
+    if (auto tg = ja.find("target"); tg != ja.end() && tg->is_object()) {
+        a.target.dest = get<std::string>(*tg, "dest", "");
+        a.target.fxId = get<std::string>(*tg, "fxId", "");
+        a.target.pkey = get<std::string>(*tg, "pkey", "");
+    }
+    return a;
+}
+
 Clip clip(const json& jc) {
     Clip c;
     c.len = get<double>(jc, "len", 384);
@@ -129,6 +172,9 @@ Clip clip(const json& jc) {
             n.durTicks = get<double>(jn, "d", 0);
             n.velocity = get<double>(jn, "v", 1);
             n.probability = get<double>(jn, "pr", 1);
+            for (const auto& [name, curve] : {std::pair<const char*, std::vector<ExprPoint>*>{"bend", &n.bend}, {"slide", &n.slide}, {"pressure", &n.pressure}})
+                if (auto it = jn.find(name); it != jn.end() && it->is_array())
+                    for (auto& pt : *it) curve->push_back({get<double>(pt, "t", 0), get<double>(pt, "v", 0)});
             c.notes.push_back(n);
         }
     return c;
@@ -216,6 +262,10 @@ Project project(const json& j) {
             }
         if (auto it = jt.find("perf"); it != jt.end() && it->is_array())
             for (auto& jp : *it) t.perf.push_back(perfSpec(jp));
+        if (auto it = jt.find("arate"); it != jt.end() && it->is_array())
+            for (auto& ja : *it) t.arate.push_back(arateSpec(ja));
+        if (auto it = jt.find("morph"); it != jt.end() && it->is_array())
+            for (auto& jm : *it) t.morph.push_back(morphSpec(jm));
         t.autoLanes = autoMap(jt, "auto");
         p.tracks.push_back(std::move(t));
     }
@@ -243,6 +293,8 @@ Project project(const json& j) {
         }
     p.masterFx = devices(j, "masterFx");
     p.masterAuto = autoMap(j, "masterAuto");
+    if (auto it = j.find("bindings"); it != j.end() && it->is_array())
+        for (auto& jb : *it) p.bindings.push_back(bindingFromJson(jb));
     return p;
 }
 
@@ -280,6 +332,17 @@ MacroSpec macroFromJson(const nlohmann::json& jm) {
     return m;
 }
 PerfSpec perfFromJson(const nlohmann::json& jp) { return perfSpec(jp); }
+ARateSpec arateFromJson(const nlohmann::json& ja) { return arateSpec(ja); }
+MorphSpec morphFromJson(const nlohmann::json& jm) { return morphSpec(jm); }
+ControlBinding bindingFromJson(const nlohmann::json& jb) {
+    ControlBinding b;
+    b.source = get<std::string>(jb, "source", "");
+    b.target = get<std::string>(jb, "target", "");
+    b.min = get<double>(jb, "min", 0);
+    b.max = get<double>(jb, "max", 1);
+    b.invert = getBool(jb, "invert", false);
+    return b;
+}
 std::vector<AutoPoint> pointsFromJson(const nlohmann::json& pts) {
     std::vector<AutoPoint> v;
     if (pts.is_array()) for (auto& p : pts) v.push_back({get<double>(p, "t", 0), get<double>(p, "v", 0)});

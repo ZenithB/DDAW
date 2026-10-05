@@ -80,6 +80,13 @@ public:
 
     // Monophonic: only the sounding note's own release counts. An older note's off, arriving after
     // a legato retrigger, is superseded (the Rust scheduler path overwrites the gate the same way).
+    // MPE: bend in semitones (smoothed), pressure raises the level by up to 50%. Slide is not used (the filter is shared).
+    void noteExpression(uint32_t noteId, int dimension, float value) override {
+        if (noteId != current_) return;
+        if (dimension == 2) bend_ = std::clamp(value, -96.0f, 96.0f);
+        else if (dimension == 1) pressure_ = std::clamp(value, 0.0f, 1.0f);
+    }
+
     void noteOff(uint32_t noteId) override {
         if (noteId != current_) return;
         ampEnv_.noteOff();
@@ -99,7 +106,11 @@ public:
                     glideStep_ = 0.0f;
                 }
             }
-            osc_.setFreq(std::exp2(freqLog2_));
+            bendS_ += (bend_ - bendS_) * 0.012f;
+            if (std::abs(bend_ - bendS_) < 1e-6f) bendS_ = bend_;
+            pressS_ += (pressure_ - pressS_) * 0.012f;
+            if (std::abs(pressure_ - pressS_) < 1e-6f) pressS_ = pressure_;
+            osc_.setFreq(std::exp2(freqLog2_ + bendS_ * (1.0f / 12.0f)));
 
             // filter cutoff: envelope (exponent 2) + LFO offset (+-cutoff*amt)
             const float e = filtEnv_.next();
@@ -110,7 +121,7 @@ public:
 
             float s = osc_.next();
             for (int f = 0; f < stages_; ++f) s = filt_[static_cast<size_t>(f)].processSample(s);
-            s *= ampEnv_.next() * vel_.next();
+            s *= ampEnv_.next() * vel_.next() * (1.0f + 0.5f * pressS_);
             l[i] += s;
             r[i] += s;
 
@@ -150,6 +161,7 @@ private:
     }
 
     void startNote(uint8_t pitch, float velocity) {
+        bend_ = bendS_ = pressure_ = pressS_ = 0.0f;   // expression belongs to a note: a new note starts neutral
         const float target = std::log2(midiHz(static_cast<float>(pitch)));
         // Tone.Monophonic portamento: glide when the previous note still sounds
         const bool audible = active_ && ampEnv_.value() > 0.05f;
@@ -183,6 +195,7 @@ private:
     float freqLog2_ = 0.0f, freqTargetLog2_ = 0.0f, glideStep_ = 0.0f;
     bool active_ = false;
     float lastFilterHz_ = -1.0f;
+    float bend_ = 0.0f, bendS_ = 0.0f, pressure_ = 0.0f, pressS_ = 0.0f;   // MPE expression, as set and as heard
     uint32_t current_ = 0;
 };
 

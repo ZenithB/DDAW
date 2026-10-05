@@ -14,6 +14,7 @@
 #include "devices/schema/Schema.generated.h"
 #include "dsp/Adsr.h"
 #include "dsp/Math.h"
+#include "dsp/NoteExpr.h"
 #include "dsp/PolyBlepOsc.h"
 #include "dsp/Smoother.h"
 
@@ -38,6 +39,7 @@ struct Voice {
     bool active = false;
     uint64_t age = 0;
     uint32_t noteId = 0;
+    NoteExpr ex;
 
     void prepare(float sr) {
         carrier.prepare(sr);
@@ -65,6 +67,7 @@ struct Voice {
         active = true;
         age = a;
         noteId = id;
+        ex.clear();
     }
     void release() {
         ampEnv.noteOff();
@@ -73,10 +76,13 @@ struct Voice {
     void render(float* l, float* r, const float* harm, int n) {
         for (int i = 0; i < n; ++i) {
             if (!ampEnv.isActive()) { active = false; return; }
-            modulator.setFreq(harm[i] * freq);
+            ex.step();
+            const float f = freq * ex.pitchFactor();
+            carrier.setFreq(f);
+            modulator.setFreq(harm[i] * f);
             const float m = modulator.next() * modEnv.next() * vel * kSynthVolumeGain;
             const float a2g = (m + 1.0f) * 0.5f;
-            const float s = carrier.next() * ampEnv.next() * vel * kSynthVolumeGain * a2g;
+            const float s = carrier.next() * ampEnv.next() * vel * kSynthVolumeGain * a2g * ex.gain();
             l[i] += s;
             r[i] += s;
         }
@@ -111,6 +117,11 @@ public:
             case Release: release_ = std::clamp(v, 0.01f, 4.0f); applyEnv(); break;
             default: break;
         }
+    }
+
+    // MPE: bend (semitones) and pressure (up to +50% level); slide is unused.
+    void noteExpression(uint32_t id, int dimension, float value) override {
+        for (auto& v : voices_) if (v.active && v.noteId == id) v.ex.set(dimension, value);
     }
 
     void noteOn(uint8_t pitch, float velocity, uint32_t noteId) override {

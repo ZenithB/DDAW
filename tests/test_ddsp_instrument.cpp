@@ -106,6 +106,36 @@ TEST_CASE("ddsp instrument: a note sounds at its pitch, deterministically, after
     CHECK(peakHz(render(*t, 400)) == Approx(440.0).epsilon(0.01));
 }
 
+TEST_CASE("ddsp instrument: per-note expression - bend moves the pitch, pressure raises the level", "[ddsp][instrument][mpe]") {
+    if (!haveModels()) SKIP("the exported model files are not present");
+    auto make = [] { auto d = createInstrument("ddsp"); d->prepare(kSr, 128); return d; };
+    auto flat = make();
+    flat->noteOn(57, 0.9f, 1);
+    const auto x = render(*flat, 400);
+    // a note's bend is in semitones: +12 is an octave up; set after the note starts, and for a note id it does not own it does nothing
+    auto up = make();
+    up->noteOn(57, 0.9f, 7);
+    up->noteExpression(99, 2, 12.0f);                       // not this note's id: ignored
+    up->noteExpression(7, 2, 12.0f);
+    CHECK(peakHz(render(*up, 400)) == Approx(440.0).epsilon(0.015));
+    // pressure raises the loudness the model is given by up to 6 dB. The model's level is not a simple function of its
+    // loudness input for a held synthetic note, so the check is that it changes the sound, repeatably, and stays audible.
+    auto loud = make(), loud2 = make();
+    for (auto* d : {loud.get(), loud2.get()}) { d->noteOn(57, 0.9f, 1); d->noteExpression(1, 1, 1.0f); }
+    const auto y = render(*loud, 400), y2 = render(*loud2, 400);
+    CHECK(y == y2);
+    CHECK(y != x);
+    CHECK(rmsOf(y, y.size() - 8192, y.size()) > 0.005);
+    // a new note starts neutral
+    auto reuse = make();
+    reuse->noteOn(57, 0.9f, 1);
+    reuse->noteExpression(1, 2, 12.0f);
+    reuse->noteOff(1);
+    render(*reuse, 100);
+    reuse->noteOn(57, 0.9f, 2);
+    CHECK(peakHz(render(*reuse, 400)) == Approx(220.0).epsilon(0.015));
+}
+
 TEST_CASE("ddsp instrument: models differ in timbre, and a released note dies away", "[ddsp][instrument]") {
     if (!haveModels() || !ddsp::modelAvailable(1)) SKIP("the exported model files are not present");
     auto spectrumTilt = [](int model) {
@@ -152,7 +182,7 @@ TEST_CASE("ddsp instrument: played by performance frames (timbre transfer)", "[d
     for (int b = 0; b < 1200; ++b) { d->performance(PerformanceFrame{0.0f, 0.0f, -80.0f, 0.0f}); render(*d, 1); }
 }
 
-TEST_CASE("ddsp instrument: live pacing - no underruns, and nothing allocates on the audio thread", "[ddsp][instrument][realtime]") {
+TEST_CASE("ddsp instrument: live pacing - no underruns, and nothing allocates on the audio thread", "[ddsp][instrument][realtime][timing]") {
     if (!haveModels()) SKIP("the exported model files are not present");
     // One 3 s run of 64-frame callbacks paced against the clock. The worker thread shares the machine with whatever else
     // is running, so a single run can be spoiled by another process (several ms of descheduling is an underrun); a real

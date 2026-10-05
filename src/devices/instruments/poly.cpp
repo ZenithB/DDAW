@@ -39,6 +39,7 @@ struct Voice {
     std::array<PolyBlepOsc, kUnison> oscs{PolyBlepOsc(Wave::Saw), PolyBlepOsc(Wave::Saw), PolyBlepOsc(Wave::Saw)};
     Adsr env;
     uint8_t pitch = 0;
+    float bend = 0.0f, bendS = 0.0f, pressure = 0.0f, pressS = 0.0f;   // MPE expression (semitones, 0..1), as set and as heard
     float vel = 0.0f;
     uint64_t serial = 0;
     uint32_t id = 0;
@@ -109,6 +110,7 @@ public:
         const bool fat = wave_ >= 4;
         Voice& v = voices_[static_cast<size_t>(idx)];
         v.pitch = pitch;
+        v.bend = v.bendS = v.pressure = v.pressS = 0.0f;
         v.vel = std::clamp(velocity, 0.0f, 1.0f);
         v.serial = serial_;
         v.id = noteId;
@@ -119,6 +121,16 @@ public:
         // attack ramps from the current level, so steals do not click
         v.env.setAdsr(attack_, decay_, sustain_, release_);
         v.env.noteOn();
+    }
+
+    // MPE: per-note bend (semitones, smoothed over the 16-sample control interval) and pressure (up to +50% level).
+    // Slide is not used: the filter is shared by all voices.
+    void noteExpression(uint32_t noteId, int dimension, float value) override {
+        for (auto& v : voices_) {
+            if (!v.inUse || v.id != noteId) continue;
+            if (dimension == 2) v.bend = std::clamp(value, -96.0f, 96.0f);
+            else if (dimension == 1) v.pressure = std::clamp(value, 0.0f, 1.0f);
+        }
     }
 
     void noteOff(uint32_t noteId) override {
@@ -172,7 +184,12 @@ public:
             const float gain = fat ? kFatGain : 1.0f;
             for (auto& v : voices_) {
                 if (!v.inUse) continue;
-                const float base = midiHz(static_cast<float>(v.pitch));
+                v.bendS += (v.bend - v.bendS) * 0.3f;
+                if (std::abs(v.bend - v.bendS) < 1e-6f) v.bendS = v.bend;
+                v.pressS += (v.pressure - v.pressS) * 0.3f;
+                if (std::abs(v.pressure - v.pressS) < 1e-6f) v.pressS = v.pressure;
+                const float base = midiHz(static_cast<float>(v.pitch) + v.bendS);
+                const float pgain = 1.0f + 0.5f * v.pressS;
                 for (int i = 0; i < count; ++i) {
                     auto& o = v.oscs[static_cast<size_t>(i)];
                     o.setWave(wave);
@@ -185,7 +202,7 @@ public:
                     if (e != 0.0f) {
                         float x = 0.0f;
                         for (int i = 0; i < count; ++i) x += v.oscs[static_cast<size_t>(i)].next();
-                        scratch[static_cast<size_t>(k)] += x * gain * e * v.vel;
+                        scratch[static_cast<size_t>(k)] += x * gain * e * v.vel * pgain;
                     }
                 }
                 if (!v.env.isActive()) v.inUse = false;

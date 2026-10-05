@@ -12,6 +12,7 @@
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
 #include "dsp/Adsr.h"
+#include "dsp/NoteExpr.h"
 #include "dsp/Lfo.h"
 #include "dsp/Math.h"
 #include "dsp/PolyBlepOsc.h"
@@ -42,6 +43,7 @@ struct Voice {
     uint64_t age = 0;
     uint32_t id = 0;
     bool released = false;
+    NoteExpr ex;
 
     Voice() { fenv.setAdsr(0.01f, 0.0f, 1.0f, 0.5f); }
 
@@ -62,6 +64,7 @@ struct Voice {
         age = a;
         id = noteId;
         released = false;
+        ex.clear();
         amp.setAdsr(adsr[0], adsr[1], adsr[2], adsr[3]);
         osc0.resetPhase(kSawStartPhase);
         osc1.resetPhase(kSawStartPhase);
@@ -84,10 +87,12 @@ struct Voice {
             filt.setCutoffQ(cutoff, kFiltQ);
             lastCutoff = cutoff;
         }
-        osc0.setFreq(freq * vib);
-        osc1.setFreq(freq * harm * vib);
+        ex.step();
+        const float f = freq * ex.pitchFactor();
+        osc0.setFreq(f * vib);
+        osc1.setFreq(f * harm * vib);
         const float x = osc0.next() + osc1.next();
-        return filt.processSample(x) * amp.next() * vel;
+        return filt.processSample(x) * amp.next() * vel * ex.gain();
     }
 };
 
@@ -120,6 +125,11 @@ public:
             case Release: adsr_[3] = std::max(v, 0.0f); applyAdsr(); break;
             default: break;
         }
+    }
+
+    // MPE: bend (semitones) and pressure (up to +50% level); slide is unused.
+    void noteExpression(uint32_t noteId, int dimension, float value) override {
+        for (auto& v : voices_) if (v.amp.isActive() && v.id == noteId) v.ex.set(dimension, value);
     }
 
     void noteOn(uint8_t pitch, float velocity, uint32_t noteId) override {

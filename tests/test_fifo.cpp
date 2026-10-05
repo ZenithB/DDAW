@@ -20,7 +20,7 @@ TEST_CASE("SpscFifo: order, full and empty", "[fifo]") {
     }
 }
 
-TEST_CASE("SpscFifo: two threads deliver every item in order", "[fifo]") {
+TEST_CASE("SpscFifo: two threads deliver every item in order", "[fifo][threads]") {
     constexpr int kN = 1'000'000;
     static SpscFifo<int, 1024> f;
     std::thread prod([] { for (int i = 0; i < kN;) if (f.push(i)) ++i; });

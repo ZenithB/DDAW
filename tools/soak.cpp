@@ -30,6 +30,7 @@
 
 #include "../tests/AllocGuard.h"
 #include "app/model/AppModel.h"
+#include "app/model/Controllers.h"
 #include "app/model/Catalog.h"
 #include "app/model/Stress.h"
 #ifdef DDAW_SOAK_DDSP
@@ -210,7 +211,7 @@ int main(int argc, char** argv) {
         const auto& p = model.project();
         const size_t nT = p.tracks.size();
         bool ok = true;
-        switch (rng() % 21) {
+        switch (rng() % 27) {
             case 0: if (!p.scenes.empty()) model.launchScene(p.scenes[pick(p.scenes.size())]); break;
             case 1: model.stopAllClips(); break;
             case 2: arrMode = !arrMode; model.play(arrMode, 0.0); break;
@@ -249,11 +250,61 @@ int main(int argc, char** argv) {
             case 17: if (!p.arr.empty()) { auto it = p.arr.begin(); std::advance(it, long(pick(p.arr.size())));
                          try { ok = model.apply(app::edit::moveArrClip(p, it->first, 96.0 * double(pick(40)))); } catch (...) { ok = false; } } break;
             case 18: if (nT) { const auto& t = p.tracks[pick(nT)]; if (t.kind == project::TrackKind::Synth) {
-                         static const char* is[] = {"poly", "mono", "duo", "fm", "keys", "pluck", "sampler"};
-                         const std::string ty = is[pick(7)];
+                         static const char* is[] = {"poly", "mono", "duo", "fm", "keys", "pluck", "sampler", "fmop"};
+                         const std::string ty = is[pick(8)];
                          if (ty != "sampler") ok = model.apply(app::edit::setInstrument(p, t.uid, ty)); } } break;
             case 19: ok = model.apply(document::cmd::setMeta("loopOn", rng() % 2 == 0)); break;
             case 20: model.setMetronome(rng() % 2 == 0); break;
+            case 21: if (nT) {   // an audio-rate route on a random FM Operators track: an oscillator or another track's audio
+                const auto& t = p.tracks[pick(nT)];
+                if (t.inst.type == "fmop" && t.arate.size() < 4) {
+                    static const char* ports[] = {"index", "pitch", "amp"};
+                    project::ARateSpec a;
+                    a.id = "r" + std::to_string(rng() % 100000);
+                    a.source = rng() % 2 ? "osc" : "track";
+                    a.shape = int(rng() % 4); a.hz = 0.5 + 2000.0 * uni(); a.follow = rng() % 2 == 0; a.depth = 2.0 * uni() - 1.0;
+                    a.srcTrack = p.tracks[pick(nT)].id;
+                    a.target = {"inst", "inst", ports[pick(3)]};
+                    ok = model.apply({"arate.insert", {{"track", t.uid}, {"index", t.arate.size()}, {"arate", project::arateToJson(a)}}});
+                } } break;
+            case 23: {   // a controller moves: a stick, a trigger, a CC (bound ones drive morph sticks live, the rest are ignored)
+                static const char* srcs[] = {"pad:lx", "pad:ly", "pad:rx", "midi:cc74", "midi:bend", "pad:rt"};
+                model.controllerInput(srcs[pick(6)], uni());
+                break;
+            }
+            case 24: if (nT) {   // a morph map on a random FM Operators track: add, move the stick, remove
+                const auto& t = p.tracks[pick(nT)];
+                if (t.inst.type == "fmop") {
+                    if (t.morph.empty()) {
+                        project::MorphSpec m; m.name = "m"; m.method = rng() % 2 ? "rbf" : "idw";
+                        m.targets = {{"inst", "inst", "index"}, {"inst", "inst", "l2"}};
+                        m.anchors = {{"a", 0.2, 0.2, {0.2, 0.3}}, {"b", 0.8, 0.7, {0.8, 0.9}}};
+                        ok = model.apply({"morph.insert", {{"track", t.uid}, {"index", 0}, {"morph", project::morphToJson(m)}}});
+                    } else if (rng() % 4 == 0) {
+                        ok = model.apply({"morph.remove", {{"track", t.uid}, {"index", 0}}});
+                    } else {
+                        ok = model.apply({"morph.pos", {{"track", t.uid}, {"index", 0}, {"x", uni()}, {"y", uni()}}});
+                    }
+                } } break;
+            case 25: {   // live playing with expression, as an MPE controller would: bend and pressure before and after the note-on
+                const int pit = int(36 + pick(48));
+                model.noteExpression(pit, 2, float((uni() - 0.5) * 24.0));
+                model.noteOn(pit, 0.3f + 0.6f * float(uni()));
+                model.noteExpression(pit, 1, float(uni()));
+                model.noteExpression(pit, 0, float(uni()));
+                if (rng() % 3 == 0) model.bend(float((uni() - 0.5) * 4.0));
+                if (rng() % 2) model.noteOff(pit);
+                break;
+            }
+            case 26: model.allNotesOff(); model.bend(0.0f); break;
+            case 22: if (nT) {   // retune or remove a route (live fields do not rebuild the graph)
+                const auto& t = p.tracks[pick(nT)];
+                if (!t.arate.empty()) {
+                    const size_t i = pick(t.arate.size());
+                    const int what = int(rng() % 3);
+                    if (what == 0) ok = model.apply({"arate.remove", {{"track", t.uid}, {"index", i}}});
+                    else ok = model.apply({"arate.field", {{"track", t.uid}, {"index", i}, {"field", what == 1 ? "depth" : "hz"}, {"value", what == 1 ? 2.0 * uni() - 1.0 : 0.5 + 3000.0 * uni()}}});
+                } } break;
         }
         ++actions;
         if (!ok) ++rejected;

@@ -1,11 +1,14 @@
 #pragma once
 #include "app/ui/ArrangementView.h"
+#include "app/ui/AudioRatePanel.h"
 #include "app/ui/BrowserPanel.h"
 #include "app/ui/ClipEditor.h"
+#include "app/ui/ControllerInput.h"
 #include "app/ui/DeviceChainView.h"
 #include "app/ui/LiveInput.h"
 #include "app/ui/MixerView.h"
 #include "app/ui/ModulationPanel.h"
+#include "app/ui/MorphPanel.h"
 #include "app/ui/SessionView.h"
 #include "app/ui/TrackingPanel.h"
 #include "app/ui/TransportBar.h"
@@ -26,9 +29,10 @@ public:
     bool keyPressed(const juce::KeyPress&) override;
     bool keyStateChanged(bool isKeyDown) override;
     LiveInput& liveInput() { return live_; }
+    ControllerInput& controllers() { return controllers_; }
 
     enum class MainTab { Session, Arrangement, Mixer };
-    enum class DetailTab { Clip, Devices, Input, Modulation };
+    enum class DetailTab { Clip, Devices, Input, Modulation, AudioRate, Morph };
     void showMain(MainTab);
     void showDetail(DetailTab);
     MainTab mainTab() const { return mainTab_; }
@@ -49,6 +53,7 @@ private:
     app::AppModel& model_;
     int listener_ = 0;
     LiveInput live_;   // before the panels that show it
+    ControllerInput controllers_;
     TransportBar transport_;
     BrowserPanel browser_;
     SessionView session_;
@@ -58,6 +63,8 @@ private:
     DeviceChainView devices_;
     TrackingPanel input_;
     ModulationPanel mod_;
+    AudioRatePanel arate_;
+    MorphPanel morph_;
     MainTab mainTab_ = MainTab::Session;
     DetailTab detailTab_ = DetailTab::Devices;
     int detailH_ = 300;

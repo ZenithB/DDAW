@@ -2,7 +2,10 @@
 // Everything the UI shares: the document wired to the live engine, the selection, file operations and
 // transport state. JUCE-free (so it is unit tested); views register a listener and re-read on change.
 // UI thread only.
+#include <algorithm>
+#include <atomic>
 #include <functional>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -117,12 +120,49 @@ public:
     void noteOff(int pitch) { engine_.liveNote(engine::Engine::LiveKind::NoteOff, pitch); }
     void sustain(bool down) { engine_.liveNote(down ? engine::Engine::LiveKind::SustainDown : engine::Engine::LiveKind::SustainUp); }
     void allNotesOff() { engine_.liveNote(engine::Engine::LiveKind::AllOff); }
+    // Per-note expression (dimension 0 slide, 1 pressure, 2 bend in semitones) and an all-notes bend, from any thread.
+    void noteExpression(int pitch, int dimension, float value) { engine_.liveExpression(pitch, dimension, value); }
+    void bend(float semitones) { engine_.liveBend(semitones); }
+    // MPE (B5): with it on, each note on a member channel (2-16) carries its own pitch bend (range `mpeRange`, 48 semitones by
+    // default), slide (CC 74) and pressure; channel 1 and non-MPE controllers bend every note by `bendRange` (2 semitones).
+    // Read by the MIDI thread, hence atomics.
+    void setMpe(bool on) { mpe_ = on; if (on && mpeLower_.load() == 0 && mpeUpper_.load() == 0) mpeLower_ = 15; notify(ModelEvent::Recording); }
+    bool mpe() const { return mpe_.load(std::memory_order_relaxed); }
+    // MPE zones: the lower zone has master channel 1 and member channels 2..1+n, the upper zone master 16 and members
+    // 15 down to 16-n (n members each; 15 lower members and no upper zone is the default "all channels" layout).
+    void setMpeZones(int lower, int upper) { applyZones(lower, upper); notify(ModelEvent::Recording); }
+    int mpeLowerMembers() const { return mpeLower_.load(std::memory_order_relaxed); }
+    int mpeUpperMembers() const { return mpeUpper_.load(std::memory_order_relaxed); }
+    // A member channel carries one note's own expression; with MPE off there are none.
+    bool mpeMember(int ch) const noexcept {
+        if (!mpe()) return false;
+        const int lo = mpeLower_.load(std::memory_order_relaxed), up = mpeUpper_.load(std::memory_order_relaxed);
+        return (lo > 0 && ch >= 2 && ch <= 1 + lo) || (up > 0 && ch <= 15 && ch >= 16 - up);
+    }
+    // From the MIDI thread (an MPE configuration message, a pitch-bend-sensitivity RPN): takes effect at once, the UI
+    // learns of it on its next tick(). `members` 0 disables that zone.
+    void midiConfigureMpe(int masterChannel, int members);
+    void midiSetBendRange(bool memberChannel, float semitones);
+    void setBendRange(float semitones) { bendRange_ = std::clamp(semitones, 1.0f, 96.0f); notify(ModelEvent::Recording); }
+    float bendRange() const { return bendRange_.load(std::memory_order_relaxed); }
+    void setMpeRange(float semitones) { mpeRange_ = std::clamp(semitones, 1.0f, 96.0f); notify(ModelEvent::Recording); }
+    float mpeRange() const { return mpeRange_.load(std::memory_order_relaxed); }
     // Polyphonic audio in: chords played into the input become notes on the live target. Opens the input.
     void setPolyInput(bool on);
     bool polyInput() const { return poly_ && poly_->running(); }
     int polyLatencyFrames() const { return poly_ ? poly_->latencyFrames() : 0; }
     // UI timer (~30 Hz): keeps the engine's track indices right after rebuilds and drains the performance queue.
     void tick();
+
+    // ---- controllers (B5): gamepad axes / buttons and MIDI CCs -> morph sticks and macros, via project bindings ----
+    // `value` is the control's position 0..1 (sticks 0.5 at rest). UI thread. True when a binding (or learn mode) used it.
+    bool controllerInput(const std::string& source, double value);
+    // Learn: the next control moved by a clear amount is bound to `target` (see app/model/Controllers.h).
+    void startLearn(const std::string& target);
+    void cancelLearn();
+    const std::string& learnTarget() const { return learn_; }
+    // Apply an edit that is not an undo step (values streaming from a controller).
+    bool applyTransient(const document::Command& c);
 
     // ---- recording ----
     RecordingController& recording() { return *recording_; }
@@ -138,6 +178,14 @@ public:
     void notify(ModelEvent e);
 
 private:
+    void applyBinding(const project::ControlBinding& b, double v);
+    std::string learn_;
+    void applyZones(int lower, int upper);
+    std::atomic<bool> mpe_{false};
+    std::atomic<int> mpeLower_{15}, mpeUpper_{0};
+    std::atomic<bool> midiConfigChanged_{false};
+    std::atomic<float> bendRange_{2.0f}, mpeRange_{48.0f};
+    std::map<std::string, double> learnBase_;   // each source's first value while learning
     void replaceDocument(project::Project p, project::Uid nextUid);
     void fixSelection();
 

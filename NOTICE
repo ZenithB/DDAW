@@ -1,0 +1,31 @@
+DDAW
+Copyright (C) the DDAW authors. Licensed under the GNU Affero General Public License, version 3 (see LICENSE).
+
+DDAW is built on, and ports, the work of others. Their licences and the status of the model weights follow.
+
+Pretrained models (NOT part of this repository)
+-----------------------------------------------
+The DDSP instrument runs Magenta's pretrained solo-instrument models (violin, flute, tenor saxophone, trumpet),
+exported to .ddspw files by tools/b1/export_weights.py. The weights are not committed to this repository and are not redistributed
+with it. scripts/fetch_checkpoints.sh downloads them from Magenta's public storage into models/ (git-ignored), and
+the app looks for the exported files in $DDAW_MODELS and ~/Library/Application Support/DDAW/models.
+Their terms are unconfirmed: the DDSP repository (Apache-2.0) states no licence for the checkpoints, and the models
+were trained on third-party recordings. Before any binary release that bundles weights, confirm the terms with
+Magenta/Google (see docs/PLAN.md, risks) or ship without them. Until then, scripts/check_no_weights.sh keeps
+them out of git.
+
+DDSP (Magenta), https://github.com/magenta/ddsp   Copyright 2019 Google LLC, Apache License 2.0
+  Ported from it (changed, in C++): the harmonic synthesiser, filtered noise, reverb convolution, the F0/loudness
+  preprocessing and A-weighted loudness extraction (src/ddsp/, src/dsp/Loudness.*), and the reference scripts in
+  tools/b1 and tools/b3 that call the original library to produce test references.
+
+synthyy, Rust/Tauri reference implementation, to be released under the AGPL. DDAW's engine, devices, document model
+and fixtures follow its behaviour; the golden fixtures in tests/fixtures/synthyy come from it.
+
+Third-party libraries (fetched at configure time, cmake/Dependencies.cmake)
+---------------------------------------------------------------------------
+JUCE 8                 Used under its AGPLv3 option (dual-licensed with a commercial licence).
+RTNeural               BSD 3-Clause, Copyright (c) 2020 jatinchowdhury18 (bundles Eigen, xsimd and nlohmann/json
+                       under their own licences).
+nlohmann/json          MIT, Copyright (c) 2013-2025 Niels Lohmann.
+Catch2 (tests only)    Boost Software License 1.0.

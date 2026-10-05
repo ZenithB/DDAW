@@ -24,6 +24,7 @@ constexpr std::array<double, 6> kArpDivTicks{96.0, 48.0, 32.0, 24.0, 16.0, 12.0}
 // Working note, mirrors the Rust `Note { p, s, d, v, pr }` (pitch is a double there).
 struct MNote {
     double p = 60, s = 0, d = 0, v = 1, pr = 1;
+    int expr = -1;   // index of the source note's expression curves; notes the effects invent have none
 };
 
 struct ScaleDef {
@@ -280,7 +281,7 @@ uint64_t trackSeed(const std::string& id) {
 }  // namespace
 
 std::vector<NoteEv> expandMidi(const std::vector<project::DeviceSpec>& chain,
-                               const std::vector<project::Note>& notes, const MidiFxContext& ctx) {
+                               const std::vector<project::Note>& notes, const MidiFxContext& ctx, const std::vector<int>* exprOf) {
     XorShift rng(trackSeed(ctx.trackId));
     std::vector<MNote> in;
     in.reserve(notes.size());
@@ -291,6 +292,7 @@ std::vector<NoteEv> expandMidi(const std::vector<project::DeviceSpec>& chain,
         m.d = n.durTicks;
         m.v = n.velocity;
         m.pr = n.probability;
+        m.expr = exprOf && size_t(&n - notes.data()) < exprOf->size() ? (*exprOf)[size_t(&n - notes.data())] : -1;
         in.push_back(m);
     }
     const std::vector<MNote> expanded = applyMidiFx(chain, std::move(in), ctx.root, ctx.scale, ctx.isDrum, rng);
@@ -305,6 +307,7 @@ std::vector<NoteEv> expandMidi(const std::vector<project::DeviceSpec>& chain,
         e.durTicks = std::fmax(n.d, 0.0);
         e.vel = static_cast<float>(n.v);
         e.pr = static_cast<float>(n.pr);
+        e.expr = n.expr;
         evs.push_back(e);
     }
     std::stable_sort(evs.begin(), evs.end(), [](const NoteEv& a, const NoteEv& b) { return a.tick < b.tick; });

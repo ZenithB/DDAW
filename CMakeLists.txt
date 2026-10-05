@@ -11,6 +11,9 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET 13.0 CACHE STRING "")
 option(DDAW_BUILD_APP   "Build the JUCE application" ON)
 option(DDAW_BUILD_TESTS "Build tests"                ON)
 option(DDAW_BUILD_DDSP  "Build the DDSP decoder (B1)" ON)
+if(APPLE AND DDAW_BUILD_APP)
+    enable_language(OBJCXX)   # the GameController backend (src/app/platform/Gamepad.mm)
+endif()
 
 include(cmake/Dependencies.cmake)
 if(DDAW_BUILD_TESTS)
@@ -62,6 +65,7 @@ add_library(ddaw_appmodel STATIC
     src/app/model/Stress.cpp
     src/app/model/Recording.cpp
     src/app/model/Settings.cpp
+    src/app/model/Controllers.cpp
     src/app/model/ExportPlan.cpp
     src/app/model/CurveRecord.cpp
     src/app/model/AppModel.cpp)

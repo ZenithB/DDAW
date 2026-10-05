@@ -30,6 +30,11 @@
 //   macro.value   {track, index, value}                the macro knob, live (no rebuild)
 //   lfo.field     {track, index, field, value}         depth | hz | phase of an LFO, live (no rebuild)
 //   perf.insert   {track, index, perf} / perf.remove {track, index} / perf.edit {track, index, perf}   performance routes (B2)
+//   binding.insert {index, binding} / binding.remove {index} / binding.edit {index, binding}   controller bindings (B5)
+//   morph.insert  {track, index, morph} / morph.remove {track, index} / morph.edit {track, index, morph}   morph maps (B5)
+//   morph.pos     {track, index, x, y}                 the stick of a morph map, live (no rebuild)
+//   arate.insert  {track, index, arate} / arate.remove {track, index} / arate.edit {track, index, arate}   audio-rate routes (B4)
+//   arate.field   {track, index, field, value}         depth | hz of an audio-rate route, live (no rebuild)
 //   macro.insert  {track, index, macro} / macro.remove {track, index} / macro.edit {track, index, macro}
 //   return.insert {index, ret} / return.remove {index} / return.edit {index, ret}
 //   compound      {label, commands: [...]}
@@ -78,6 +83,9 @@ public:
     // Apply a command. Returns what changed; `applied` is the normalised command (uids filled in) that
     // was actually executed, which is what a log or a collaborator should record.
     ChangeInfo apply(const Command& c, Command* applied = nullptr);
+    // Execute without recording history: for values that stream in from a controller (a stick moving 60 times a second
+    // must not fill the undo stack). The document changes and is marked modified; the change report is returned.
+    ChangeInfo applyTransient(const Command& c);
 
     bool canUndo() const { return !undo_.empty(); }
     bool canRedo() const { return !redo_.empty(); }

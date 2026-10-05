@@ -8,6 +8,7 @@
 #include "ddsp/DdspParams.h"
 #include "devices/instruments/follow.h"
 #include "devices/schema/Schema.generated.h"
+#include "devices/schema/SchemaB4.h"
 
 namespace ddaw::app {
 
@@ -24,6 +25,7 @@ std::vector<DeviceInfo> build() {
         {"mono", "Mono Synth", "Synth", C::Instrument, sp(kInstMono)},
         {"duo", "Duo", "Synth", C::Instrument, sp(kInstDuo)},
         {"fm", "FM", "Synth", C::Instrument, sp(kInstFm)},
+        {"fmop", "FM Operators", "Synth", C::Instrument, sp(kInstFmop)},
         {"keys", "Keys", "Keys and Plucks", C::Instrument, sp(kInstKeys)},
         {"pluck", "Pluck", "Keys and Plucks", C::Instrument, sp(kInstPluck)},
         {"drum", "Drum Machine", "Drums", C::Instrument, sp(kInstDrum)},

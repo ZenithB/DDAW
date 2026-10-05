@@ -129,7 +129,7 @@ TEST_CASE("output is bit-identical for every callback size, with everything movi
     }
 }
 
-TEST_CASE("the kitchen sink stays within the real-time budget at 64 frames", "[engine][realtime]") {
+TEST_CASE("the kitchen sink stays within the real-time budget at 64 frames", "[engine][realtime][timing]") {
     Engine e; e.prepare(kSr, MasterLimiterConfig{MasterLimiterConfig::Mode::ToneCompat, 0});
     e.setInitialGraph(build(1).graph);
     launchAll(e, 3, 0, 1);

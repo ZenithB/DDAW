@@ -180,7 +180,7 @@ TEST_CASE("timeline: coordinate maps, zoom anchoring and snap grids", "[appmodel
 
 #include "app/model/Demo.h"
 
-TEST_CASE("model: the demo song plays through a live engine and edits land while it plays", "[appmodel][live]") {
+TEST_CASE("model: the demo song plays through a live engine and edits land while it plays", "[appmodel][live][threads]") {
     engine::Engine eng;
     eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
@@ -431,19 +431,32 @@ TEST_CASE("settings: round trip, defaults on a missing file, clean start on a da
     CHECK(d.recording.countInBars == 0);
     AppSettings s;
     s.recording.offsetMs = 37.0; s.recording.countInBars = 2; s.recording.monitor = true; s.inputMode = 2;
+    s.mpe = true; s.bendRange = 12.0f; s.mpeRange = 24.0f; s.mpeLower = 7; s.mpeUpper = 5;
     REQUIRE(saveSettings(path, s));
     const auto l = loadSettings(path);
     CHECK(l.recording.offsetMs == 37.0);
     CHECK(l.recording.countInBars == 2);
     CHECK(l.recording.monitor);
     CHECK(l.inputMode == 2);
+    CHECK(l.mpe);
+    CHECK(l.bendRange == 12.0f);
+    CHECK(l.mpeRange == 24.0f);
+    CHECK(l.mpeLower == 7);
+    CHECK(l.mpeUpper == 5);
+    CHECK(d.mpeLower == 15);
+    CHECK(d.mpeUpper == 0);
+    CHECK_FALSE(d.mpe);                           // defaults: MPE off, 2 and 48 semitones
+    CHECK(d.bendRange == 2.0f);
+    CHECK(d.mpeRange == 48.0f);
     { std::ofstream out(path); out << "{ not json"; }
     CHECK(loadSettings(path).recording.countInBars == 0);
-    { std::ofstream out(path); out << R"({"recording":{"countInBars":99,"offsetMs":9999},"inputMode":-4})"; }
+    { std::ofstream out(path); out << R"({"recording":{"countInBars":99,"offsetMs":9999},"inputMode":-4,"bendRange":500,"mpeRange":0})"; }
     const auto c = loadSettings(path);
     CHECK(c.recording.countInBars == 2);          // clamped
     CHECK(c.recording.offsetMs == 500.0);
     CHECK(c.inputMode == 0);
+    CHECK(c.bendRange == 96.0f);
+    CHECK(c.mpeRange == 1.0f);
     fs::remove_all(fs::path(path).parent_path());
 }
 
@@ -624,6 +637,68 @@ TEST_CASE("recording: a chord and a held note played live become a clip, in time
     CHECK(byPitch[72].startTicks > byPitch[60].startTicks + 100.0);
     CHECK(byPitch[72].startTicks + byPitch[72].durTicks <= clip.clip.len + 1e-6);   // the held note ends at the take's end
     CHECK(clip.start == Approx(0.0).margin(1e-6));
+    m.undo();
+    CHECK(m.project().arr.empty());
+}
+
+TEST_CASE("recording: a note's expression (bend, pressure) is recorded as curves on the note, and played back", "[appmodel][recording][midi][mpe]") {
+    engine::Engine eng;
+    eng.prepare(48000.0);
+    AppModel m(eng, 48000.0);
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
+    const auto synth = m.project().tracks[0].uid;
+    project::DeviceSpec fmop; fmop.type = "fmop";
+    fmop.params = {{"algo", 4}, {"l1", 1}, {"l2", 0}, {"l3", 0}, {"l4", 0}, {"attack", 0.001}, {"sustain", 1.0}, {"release", 0.05}};
+    REQUIRE(m.apply({"inst.set", {{"track", synth}, {"device", project::deviceToJson(fmop, true)}}}));
+    test::FakeDevice dev(eng, 64, 64);
+    dev.paced = true;
+    RecordingEnv env;
+    env.outputLatencyFrames = [] { return 0; };
+    env.sampleRate = [] { return 48000.0; };
+    m.recording().setEnv(env);
+    auto waitFor = [&](auto pred, int ms) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (std::chrono::steady_clock::now() < end) { m.tick(); if (pred()) return true; std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+        return pred();
+    };
+    REQUIRE(waitFor([&] { return !m.service().busy() && m.service().publishedEpoch() > 0; }, 5000));
+    m.recording().arm(synth, true);
+    std::string err;
+    REQUIRE(waitFor([&] { return eng.liveTrack() == 0; }, 2000));
+    REQUIRE(m.recording().start(err));
+    auto waitUntilFrame = [&](uint64_t f) { waitFor([&] { return dev.frames.load() >= f; }, 8000); };
+    const uint64_t t0 = dev.frames.load();
+    waitUntilFrame(t0 + 9600);                                  // 0.2 s
+    const uint64_t at = dev.frames.load();
+    m.noteExpression(69, 2, 3.0f);                              // bend sent BEFORE the note-on, as an MPE controller does
+    m.noteOn(69, 0.9f);
+    for (int i = 1; i <= 20; ++i) {                             // a one-second sweep from +3 up to +12 semitones, with growing pressure
+        waitUntilFrame(at + uint64_t(i) * 2400);                // every 50 ms
+        m.noteExpression(69, 2, 3.0f + 9.0f * float(i) / 20.0f);
+        m.noteExpression(69, 1, float(i) / 20.0f);
+    }
+    m.noteOff(69);
+    waitUntilFrame(at + 52800);
+    m.stop();
+    INFO(m.status());
+    dev.stop();
+    REQUIRE(m.project().arr.size() == 1);
+    const auto& notes = m.project().arr.begin()->second.clip.notes;
+    REQUIRE(notes.size() == 1);
+    const auto& n = notes[0];
+    REQUIRE(n.bend.size() >= 15);                               // a point per 50 ms step plus the starting value
+    CHECK(n.bend.front().t == Approx(0.0).margin(4.0));         // the value the note started with
+    CHECK(n.bend.front().v == Approx(3.0).margin(0.05));
+    CHECK(n.bend.back().v == Approx(12.0).margin(0.3));
+    CHECK(n.bend.back().t == Approx(192.0).margin(24.0));       // ~1 s = 192 ticks
+    for (size_t i = 1; i < n.bend.size(); ++i) { CHECK(n.bend[i].t >= n.bend[i - 1].t); CHECK(n.bend[i].v >= n.bend[i - 1].v - 1e-4); }
+    REQUIRE(n.pressure.size() >= 15);
+    CHECK(n.pressure.back().v == Approx(1.0).margin(0.02));
+    CHECK(n.slide.empty());                                     // never touched: no curve
+    // the recorded clip plays the glide back: the note's pitch rises through the first second
+    const auto j = project::projectToJson(m.project());
+    REQUIRE(j["arr"].size() == 1);
+    CHECK(j["arr"].begin().value()["clip"]["notes"].begin().value().contains("bend"));
     m.undo();
     CHECK(m.project().arr.empty());
 }

@@ -269,6 +269,7 @@ void Engine::fireDueEvents(int& chunk) noexcept {
             if (ev && ev->audible) {
                 const uint32_t id = ++noteCounter_;
                 cur_->noteOn(static_cast<uint16_t>(ti), ev->pitch, ev->vel, id);
+                if (ev->expr >= 0) cur_->startExpression(static_cast<uint16_t>(ti), id, *fire, ev->durTicks, ev->expr);
                 // The note ends after its duration (at least 20 ms), counted in frames from now.
                 const double gateFrames = std::max(ev->durTicks * fpt, 0.02 * sr_);
                 cur_->scheduleGate(nowFrame + static_cast<int64_t>(gateFrames), static_cast<uint16_t>(ti), id);
@@ -303,7 +304,7 @@ void Engine::renderNextChunk() noexcept {
     drainLiveNotes();
     // Chunks end on the absolute kMaxBlock grid (or earlier at an event), whatever the callback size.
     int chunk = kMaxBlock - static_cast<int>(transport_.nowFrame() % kMaxBlock);
-    if (cur_ && transport_.playing()) fireDueEvents(chunk);
+    if (cur_ && transport_.playing()) { fireDueEvents(chunk); cur_->updateExpression(transport_.positionTicks()); }
     if (perfQCount_ > 0) {   // the oldest waiting tracked frame goes to the target's instrument before the chunk renders
         if (cur_ && trackTarget_ >= 0) cur_->performance(static_cast<uint16_t>(trackTarget_), perfQueue_[perfQHead_]);
         perfQHead_ = (perfQHead_ + 1) % 16;
@@ -357,8 +358,29 @@ void Engine::process(float* l, float* r, int n) noexcept {
 
 void Engine::liveNote(LiveKind kind, int pitch, float velocity) noexcept {
     while (liveLock_.test_and_set(std::memory_order_acquire)) {}   // producers only; held for one FIFO push
-    liveQ_.push({kind, static_cast<uint8_t>(std::clamp(pitch, 0, 127)), velocity});
+    liveQ_.push({kind, static_cast<uint8_t>(std::clamp(pitch, 0, 127)), velocity, 0});
     liveLock_.clear(std::memory_order_release);
+}
+void Engine::liveExpression(int pitch, int dimension, float value) noexcept {
+    while (liveLock_.test_and_set(std::memory_order_acquire)) {}
+    liveQ_.push({LiveKind::Expression, static_cast<uint8_t>(std::clamp(pitch, 0, 127)), value, static_cast<uint8_t>(std::clamp(dimension, 0, 2))});
+    liveLock_.clear(std::memory_order_release);
+}
+void Engine::liveBend(float semitones) noexcept {
+    while (liveLock_.test_and_set(std::memory_order_acquire)) {}
+    liveQ_.push({LiveKind::BendAll, 0, semitones, 2});
+    liveLock_.clear(std::memory_order_release);
+}
+// The value a device gets for one dimension of one sounding live note: pitch bend adds the all-notes bend.
+void Engine::sendExpression(int tr, int pitch, int dim) noexcept {
+    if (!cur_ || tr < 0 || tr >= cur_->trackCount() || liveId_[pitch] == 0) return;
+    const float v = dim == 2 ? expr_[pitch][2] + bendAll_ : expr_[pitch][dim];
+    cur_->noteExpression(static_cast<uint16_t>(tr), liveId_[pitch], dim, v);
+    // for recording: only a clear change (a stream of a hundred messages a second would drown the queue)
+    if (std::abs(v - exprEchoed_[pitch][dim]) >= (dim == 2 ? 0.02f : 0.01f)) {
+        exprEchoed_[pitch][dim] = v;
+        noteRecQ_.push({transport_.positionTicks(), liveId_[pitch], static_cast<uint16_t>(tr), static_cast<uint8_t>(pitch), 2, v, static_cast<uint8_t>(dim)});
+    }
 }
 
 void Engine::liveRelease(int pitch) noexcept {
@@ -368,6 +390,7 @@ void Engine::liveRelease(int pitch) noexcept {
     noteRecQ_.push({transport_.positionTicks(), liveId_[pitch], static_cast<uint16_t>(std::max(tr, 0)), static_cast<uint8_t>(pitch), 0, 0.0f});
     liveId_[pitch] = 0;
     sustained_[pitch] = false;
+    for (int d = 0; d < 3; ++d) { expr_[pitch][d] = 0.0f; exprEchoed_[pitch][d] = 0.0f; }
 }
 
 void Engine::drainLiveNotes() noexcept {
@@ -378,15 +401,26 @@ void Engine::drainLiveNotes() noexcept {
             case LiveKind::NoteOn: {
                 if (!cur_ || tr < 0 || tr >= cur_->trackCount()) break;
                 const int p = n.pitch;
+                float keep[3] = {expr_[p][0], expr_[p][1], expr_[p][2]};   // expression sent ahead of this note-on (MPE) survives the retrigger
                 if (liveId_[p]) liveRelease(p);               // the same key struck again: end the old note first
+                for (int d = 0; d < 3; ++d) expr_[p][d] = keep[d];
                 const uint32_t id = 0x40000000u | (++liveCounter_ & 0x3FFFFFFFu);
                 liveId_[p] = id;
                 sustained_[p] = false;
                 cur_->noteOn(static_cast<uint16_t>(tr), n.pitch, n.vel, id);
                 cur_->fireDucks(tr, n.pitch);
                 noteRecQ_.push({transport_.positionTicks(), id, static_cast<uint16_t>(tr), n.pitch, 1, n.vel});
+                for (int d = 0; d < 3; ++d) { exprEchoed_[p][d] = 0.0f; if (expr_[p][d] != 0.0f || (d == 2 && bendAll_ != 0.0f)) sendExpression(tr, p, d); }   // after the note-on record: the values the note starts with
                 break;
             }
+            case LiveKind::Expression:
+                expr_[n.pitch][n.dim] = n.vel;
+                sendExpression(tr, n.pitch, n.dim);
+                break;
+            case LiveKind::BendAll:
+                bendAll_ = n.vel;
+                for (int p = 0; p < 128; ++p) if (liveId_[p]) sendExpression(tr, p, 2);
+                break;
             case LiveKind::NoteOff:
                 if (sustain_) sustained_[n.pitch] = true; else liveRelease(n.pitch);
                 break;

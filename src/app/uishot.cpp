@@ -9,6 +9,7 @@
 #include <iostream>
 
 #include "app/model/AppModel.h"
+#include "app/model/Controllers.h"
 #include "app/model/Demo.h"
 #include "app/ui/ExportDialog.h"
 #include "project/ProjectJson.h"
@@ -25,7 +26,7 @@ int main(int argc, char** argv) {
     bool demo = false, play = false, arm = false;
     std::string popup;   // "export" or "record": render that dialog alone
     int w = 1440, h = 900;
-    std::string mainTab = "session", detail = "devices", selClip;
+    std::string mainTab = "session", detail = "devices", selClip, instrument;
     int selTrack = -1;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -40,6 +41,7 @@ int main(int argc, char** argv) {
         else if (a == "--detail") detail = next();
         else if (a == "--select-track") selTrack = std::stoi(next());
         else if (a == "--select-clip") selClip = next();
+        else if (a == "--instrument") instrument = next();   // replace the selected track's instrument first
     }
 
     engine::Engine engine;
@@ -93,7 +95,35 @@ int main(int argc, char** argv) {
         model.apply({"macro.insert", {{"track", uid}, {"index", 0}, {"macro", project::macroToJson(mc)}}});
         model.apply({"env.set", {{"scope", {{"track", uid}}}, {"key", "inst|inst|cutoff"}, {"points", project::pointsToJson({{0, 0.2}, {384, 0.8}, {768, 0.35}, {1152, 0.9}, {1536, 0.5}})}}});
     }
-    main.showDetail(detail == "mod" ? ui::MainComponent::DetailTab::Modulation : detail == "clip" ? ui::MainComponent::DetailTab::Clip : detail == "input" ? ui::MainComponent::DetailTab::Input : ui::MainComponent::DetailTab::Devices);
+    if (!instrument.empty() && model.selection().track) {
+        project::DeviceSpec d; d.type = instrument;
+        model.apply({"inst.set", {{"track", model.selection().track}, {"device", project::deviceToJson(d, true)}}});
+    }
+    if (detail == "arate") {   // an FM Operators instrument with two routes: an oscillator on amp, another track's envelope on index
+        const auto uid = model.selection().track;
+        project::DeviceSpec fm; fm.type = "fmop";
+        model.apply({"inst.set", {{"track", uid}, {"device", project::deviceToJson(fm, true)}}});
+        project::ARateSpec a; a.id = "ar1"; a.source = "osc"; a.shape = 1; a.hz = 5.5; a.depth = 0.35; a.target = {"inst", "inst", "amp"};
+        project::ARateSpec b; b.id = "ar2"; b.source = "track"; b.srcTrack = model.project().tracks[0].id; b.follow = true; b.depth = -0.6; b.target = {"inst", "inst", "index"};
+        model.apply({"arate.insert", {{"track", uid}, {"index", 0}, {"arate", project::arateToJson(a)}}});
+        model.apply({"arate.insert", {{"track", uid}, {"index", 1}, {"arate", project::arateToJson(b)}}});
+    }
+    if (detail == "morph") {   // an FM Operators track with a four-anchor map moving ratio, level and index
+        const auto uid = model.selection().track;
+        project::DeviceSpec fm; fm.type = "fmop";
+        model.apply({"inst.set", {{"track", uid}, {"device", project::deviceToJson(fm, true)}}});
+        project::MorphSpec m; m.name = "Timbre"; m.x = 0.62; m.y = 0.38;
+        m.targets = {{"inst", "inst", "index"}, {"inst", "inst", "r2"}, {"inst", "inst", "l2"}};
+        m.curves = {1.0, 1.0, 0.6};
+        m.anchors = {{"soft", 0.12, 0.15, {0.05, 0.3, 0.1}}, {"bell", 0.85, 0.2, {0.4, 0.8, 0.5}}, {"brass", 0.2, 0.85, {0.8, 0.4, 0.9}}, {"glass", 0.82, 0.88, {0.6, 0.95, 0.3}}};
+        model.apply({"morph.insert", {{"track", uid}, {"index", 0}, {"morph", project::morphToJson(m)}}});
+        const auto id = app::edit::findTrack(model.project(), uid)->id;
+        project::ControlBinding bx; bx.source = "pad:lx"; bx.target = app::morphTarget(id, 0, 'x');
+        project::ControlBinding by; by.source = "pad:ly"; by.target = app::morphTarget(id, 0, 'y');
+        model.apply({"binding.insert", {{"index", 0}, {"binding", project::bindingToJson(bx)}}});
+        model.apply({"binding.insert", {{"index", 1}, {"binding", project::bindingToJson(by)}}});
+    }
+    main.showDetail(detail == "morph" ? ui::MainComponent::DetailTab::Morph : detail == "arate" ? ui::MainComponent::DetailTab::AudioRate : detail == "mod" ? ui::MainComponent::DetailTab::Modulation : detail == "clip" ? ui::MainComponent::DetailTab::Clip : detail == "input" ? ui::MainComponent::DetailTab::Input : ui::MainComponent::DetailTab::Devices);
     main.resized();
     main.tick();
     (void)play;

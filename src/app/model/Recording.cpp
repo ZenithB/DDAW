@@ -250,6 +250,7 @@ bool RecordingController::stop(std::string& message) {
             if (!armed_.count(t.uid) || t.kind == project::TrackKind::Audio) continue;
             struct Open { double start; float vel; };
             std::map<uint32_t, Open> open;
+            std::map<uint32_t, std::array<std::vector<project::ExprPoint>, 3>> curves;   // expression echoed while each note sounds
             project::Clip c;
             auto close = [&](uint32_t id, double endAt) {
                 auto it = open.find(id);
@@ -259,6 +260,10 @@ bool RecordingController::stop(std::string& message) {
                 n.startTicks = it->second.start;
                 n.durTicks = std::max(12.0, endAt - it->second.start);
                 n.velocity = it->second.vel;
+                if (auto cv = curves.find(id); cv != curves.end()) {   // dimension 0 slide, 1 pressure, 2 bend
+                    for (auto& [dim, dst] : {std::pair<int, std::vector<project::ExprPoint>*>{0, &n.slide}, {1, &n.pressure}, {2, &n.bend}})
+                        for (const auto& pt : cv->second[size_t(dim)]) if (pt.t <= n.durTicks) dst->push_back(pt);
+                }
                 c.notes.push_back(n);
                 open.erase(it);
             };
@@ -267,7 +272,10 @@ bool RecordingController::stop(std::string& message) {
             for (const auto& ev : notes_) {
                 if (ev.track != ti) continue;
                 const double tick = ev.tick - compTicks;
-                if (ev.on) { if (tick >= clipStart) { open[ev.id] = {tick - clipStart, ev.velocity}; pitchOf[ev.id] = ev.pitch; } }
+                if (ev.on == 2) {   // expression of a note that is sounding: a point on its curve, relative to the note's start
+                    if (auto it = open.find(ev.id); it != open.end() && ev.dim < 3)
+                        curves[ev.id][ev.dim].push_back({std::max(0.0, tick - clipStart - it->second.start), double(ev.velocity)});
+                } else if (ev.on) { if (tick >= clipStart) { open[ev.id] = {tick - clipStart, ev.velocity}; pitchOf[ev.id] = ev.pitch; } }
                 else if (open.count(ev.id)) { const auto pitch = pitchOf[ev.id]; close(ev.id, tick - clipStart); c.notes.back().pitch = pitch; }
             }
             for (auto& [id, o] : std::map<uint32_t, Open>(open)) { const auto pitch = pitchOf[id]; close(id, std::max(o.start + 12.0, endTick - clipStart)); c.notes.back().pitch = pitch; }

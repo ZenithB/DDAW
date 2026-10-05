@@ -26,6 +26,7 @@ void Session::pushTempo(double bpm) {
 }
 
 ChangeInfo Session::apply(const Command& c) { return route(doc_.apply(c)); }
+ChangeInfo Session::applyTransient(const Command& c) { return route(doc_.applyTransient(c)); }
 ChangeInfo Session::undo() { return route(doc_.undo()); }
 ChangeInfo Session::redo() { return route(doc_.redo()); }
 

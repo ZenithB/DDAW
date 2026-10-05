@@ -13,11 +13,17 @@ constexpr size_t kTraceLen = 220;   // ~7 s at 30 Hz
 }
 
 TrackingPanel::TrackingPanel(app::AppModel& m, LiveInput& live) : View(m), live_(live) {
-    for (juce::Component* c : std::initializer_list<juce::Component*>{&track_, &target_, &curves_, &addRoute_, &minHz_, &keys_, &notes_, &poly_}) addAndMakeVisible(c);
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&track_, &target_, &curves_, &addRoute_, &minHz_, &keys_, &notes_, &poly_, &mpe_, &bendRange_, &mpeRange_}) addAndMakeVisible(c);
     track_.setToggleable(true);
     curves_.setToggleable(true);
     keys_.setToggleable(true);
     poly_.setToggleable(true);
+    mpe_.setToggleable(true);
+    mpe_.onToggle = [this](bool on) { model.setMpe(on); };
+    bendRange_.setValue(model.bendRange());
+    bendRange_.onChange = [this](double v) { model.setBendRange(float(v)); };
+    mpeRange_.setValue(model.mpeRange());
+    mpeRange_.onChange = [this](double v) { model.setMpeRange(float(v)); };
     poly_.onToggle = [this](bool on) { model.setPolyInput(on); };
     notes_.setToggleable(true);
     keys_.onToggle = [this](bool on) { live_.setKeyboardEnabled(on); repaint(); };
@@ -57,6 +63,9 @@ void TrackingPanel::resized() {
     notes_.setBounds(142, 112, 170, 26);
     keys_.setBounds(14, 148, 160, 26);
     poly_.setBounds(180, 148, 134, 26);
+    mpe_.setBounds(14, 196, 60, 26);
+    bendRange_.setBounds(116, 196, 64, 26);
+    mpeRange_.setBounds(250, 196, 64, 26);
     addRoute_.setBounds(getWidth() - 100, kTopH - 24, 86, 24);
 }
 
@@ -66,6 +75,7 @@ void TrackingPanel::refresh(app::ModelEvent) {
     notes_.setOn(model.recording().settings().recordNotes);
     keys_.setOn(live_.keyboardEnabled());
     poly_.setOn(model.polyInput());
+    mpe_.setOn(model.mpe());
     const auto* t = app::edit::findTrack(model.project(), model.trackingTarget());
     target_.setText(t ? "Plays: " + juce::String(t->name) : juce::String("Plays: none"));
     repaint();
@@ -105,6 +115,14 @@ void TrackingPanel::paint(juce::Graphics& g) {
         if (live_.keyboardEnabled()) t << juce::String::formatted("   keys: octave %d, velocity %d  (Z X C V)", live_.octave(), int(live_.velocity() * 127.0f));
         g.drawFittedText(t, juce::Rectangle<int>(14, 176, 300, 14), juce::Justification::topLeft, 1);
     }
+
+    g.setColour(col::dim);
+    g.setFont(uiFont(11.0f));
+    g.drawText("bend", 80, 196, 34, 26, juce::Justification::centredRight);
+    g.drawText("per note", 184, 196, 64, 26, juce::Justification::centredRight);
+    g.drawFittedText(model.mpe() ? (juce::String("MPE on: ") + (model.mpeLowerMembers() ? "lower zone " + juce::String(model.mpeLowerMembers()) + " ch" : juce::String()) +
+                                    (model.mpeLowerMembers() && model.mpeUpperMembers() ? ", " : "") + (model.mpeUpperMembers() ? "upper zone " + juce::String(model.mpeUpperMembers()) + " ch" : juce::String()) + ". Per-note bend, slide, pressure.")
+                                 : juce::String("MPE off: a bend wheel bends every note."), juce::Rectangle<int>(14, 226, 300, 14), juce::Justification::topLeft, 1);
 
     // live readout
     const bool live = model.tracking() || model.recording().recording();

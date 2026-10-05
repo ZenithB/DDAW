@@ -69,6 +69,23 @@ std::vector<std::string> splitKey(const std::string& key) {
     return parts;
 }
 
+// Registers the expression curves of the notes that have any and returns each note's index (-1: none).
+std::vector<int> exprIndices(Graph& g, const std::vector<project::Note>& notes) {
+    std::vector<int> out(notes.size(), -1);
+    for (size_t i = 0; i < notes.size(); ++i) {
+        const auto& n = notes[i];
+        if (n.bend.empty() && n.slide.empty() && n.pressure.empty()) continue;
+        ExprSeq s;
+        const std::vector<project::ExprPoint>* src[3] = {&n.slide, &n.pressure, &n.bend};
+        for (int d = 0; d < 3; ++d) {
+            for (const auto& p : *src[d]) s.dim[size_t(d)].push_back({float(p.t), float(p.v)});
+            std::stable_sort(s.dim[size_t(d)].begin(), s.dim[size_t(d)].end(), [](const ExprSeq::Pt& a, const ExprSeq::Pt& b) { return a.t < b.t; });
+        }
+        out[i] = g.addExprSeq(std::move(s));
+    }
+    return out;
+}
+
 std::vector<ModPt> ptsOf(const std::vector<project::AutoPoint>& points) {
     std::vector<ModPt> out;
     out.reserve(points.size());
@@ -313,7 +330,8 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
                 MidiFxContext mc{tid, t.kind == TrackKind::Drum, root, scale, len};
                 ClipPattern pat;
                 pat.loopLen = len;
-                pat.events = expandMidi(t.midifx, clip.notes, mc);
+                const auto exprOf = exprIndices(g, clip.notes);
+                pat.events = expandMidi(t.midifx, clip.notes, mc, &exprOf);
                 pat.events.erase(std::remove_if(pat.events.begin(), pat.events.end(), [&](const NoteEv& e) { return e.tick >= len; }), pat.events.end());
                 s.sched.session[si] = std::move(pat);
             }
@@ -329,7 +347,8 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
                     continue;
                 }
                 MidiFxContext mc{tid, t.kind == TrackKind::Drum, root, scale, len};
-                auto evs = expandMidi(t.midifx, a.clip.notes, mc);
+                const auto exprOf = exprIndices(g, a.clip.notes);
+                auto evs = expandMidi(t.midifx, a.clip.notes, mc, &exprOf);
                 for (auto& e : evs) if (e.tick < len) { e.tick += a.start; s.sched.arr.push_back(e); }
             }
             std::stable_sort(s.sched.arr.begin(), s.sched.arr.end(), [](const NoteEv& a, const NoteEv& b) { return a.tick < b.tick; });
@@ -346,9 +365,90 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
         }
     }
 
-    // ---- render order: non-bus tracks in document order, then buses topologically ----
+    // ---- audio-rate routes (B4): resolve target and source, order the tracks so a source renders first, reject loops ----
+    std::vector<std::pair<int, int>> aEdges;   // [src, dst]: the source track renders before the target track
+    auto reaches = [&](int from, int to) {     // is there already a render-order path from -> to?
+        std::vector<int> stack{from};
+        std::vector<bool> seen(nTracks, false);
+        while (!stack.empty()) {
+            const int u = stack.back(); stack.pop_back();
+            if (u == to) return true;
+            if (seen[size_t(u)]) continue;
+            seen[size_t(u)] = true;
+            for (auto& e : aEdges) if (e.first == u) stack.push_back(e.second);
+        }
+        return false;
+    };
+    for (size_t ti = 0; ti < nTracks; ++ti) {
+        const auto& t = p.tracks[ti];
+        for (size_t ai = 0; ai < t.arate.size(); ++ai) {
+            const auto& sp = t.arate[ai];
+            const std::string where = "track " + t.id + " audio-rate route " + std::to_string(ai);
+            if (!sp.on) continue;
+            // target: the instrument or one of this track's effects, an A-rate parameter
+            std::span<const ParamSpec> specs;
+            AModBufs* mods = nullptr;
+            int dstFx = -1;
+            if (sp.target.dest == "inst") {
+                if (g.track(int(ti)).inst) { specs = g.track(int(ti)).inst->params(); mods = &g.track(int(ti)).instMod; }
+            } else {
+                for (const auto& bf : builtFx[ti])
+                    if (bf.id == sp.target.fxId) { specs = bf.specs; dstFx = int(bf.slot) - int(kSlotFx0); mods = &g.track(int(ti)).fx[size_t(dstFx)].mod; break; }
+            }
+            if (!mods) { issues.insert(where + ": target device not found"); continue; }
+            const int pi = findParam(specs, sp.target.pkey);
+            if (pi < 0) { issues.insert(where + ": unknown parameter '" + sp.target.pkey + "'"); continue; }
+            const ParamSpec& ps = specs[size_t(pi)];
+            if (!ps.audioRate) { issues.insert(where + ": '" + sp.target.pkey + "' does not accept audio-rate modulation"); continue; }
+            size_t ordinal = 0, numA = 0;
+            for (size_t q = 0; q < specs.size(); ++q) if (specs[q].audioRate) { if (q < size_t(pi)) ++ordinal; ++numA; }
+            AudioRoute r;
+            r.specIndex = int(ai);
+            r.dstTrack = int(ti);
+            r.dstFx = dstFx;
+            r.ordinal = ordinal;
+            r.halfRange = (ps.max - ps.min) * 0.5f;
+            r.depth = std::clamp(static_cast<float>(sp.depth), -1.0f, 1.0f);
+            if (sp.source == "track") {
+                const int src = find(sp.srcTrack);
+                if (src < 0) { issues.insert(where + ": source track '" + sp.srcTrack + "' not found"); continue; }
+                if (isBus(src)) { issues.insert(where + ": a bus cannot be a modulation source"); continue; }
+                if (src == int(ti) || (!isBus(int(ti)) && reaches(int(ti), src))) { issues.insert(where + ": modulation loop with track '" + sp.srcTrack + "'"); continue; }
+                r.kind = AudioRoute::Kind::Track;
+                r.src = src;
+                r.follow = sp.follow;
+                r.atk = 1.0f - std::exp(-1.0f / std::max(static_cast<float>(sp.attackMs) * 0.001f * static_cast<float>(sr), 1.0f));
+                r.rel = 1.0f - std::exp(-1.0f / std::max(static_cast<float>(sp.releaseMs) * 0.001f * static_cast<float>(sr), 1.0f));
+                if (!isBus(int(ti))) aEdges.push_back({src, int(ti)});
+            } else {
+                r.kind = AudioRoute::Kind::Osc;
+                r.shape = std::clamp(sp.shape, 0, 3);
+                r.hz = std::clamp(static_cast<float>(sp.hz), 0.05f, 12000.0f);
+            }
+            if (mods->ptrs.empty()) mods->init(numA);
+            mods->ensure(ordinal);
+            g.addAudioRoute(r);
+            res.insert(t.id + "|arate" + std::to_string(ai) + "|depth", {static_cast<uint16_t>(ti), kSlotArate, static_cast<uint16_t>(ai * 4 + kArateDepth)});
+            res.insert(t.id + "|arate" + std::to_string(ai) + "|hz", {static_cast<uint16_t>(ti), kSlotArate, static_cast<uint16_t>(ai * 4 + kArateHz)});
+        }
+    }
+
+    // ---- render order: non-bus tracks in document order (sources of audio-rate routes first), then buses topologically ----
     std::vector<int> order;
-    for (size_t i = 0; i < nTracks; ++i) if (!isBus(static_cast<int>(i))) order.push_back(static_cast<int>(i));
+    {
+        std::vector<int> indeg(nTracks, 0);
+        std::vector<bool> done(nTracks, false);
+        for (auto& e : aEdges) ++indeg[size_t(e.second)];
+        for (;;) {
+            int pick = -1;
+            for (size_t i = 0; i < nTracks; ++i) if (!isBus(int(i)) && !done[i] && indeg[i] == 0) { pick = int(i); break; }
+            if (pick < 0) break;
+            done[size_t(pick)] = true;
+            order.push_back(pick);
+            for (auto& e : aEdges) if (e.first == pick) --indeg[size_t(e.second)];
+        }
+        for (size_t i = 0; i < nTracks; ++i) if (!isBus(int(i)) && !done[i]) order.push_back(int(i));   // unreachable: loops are rejected above
+    }
     for (int b : busOrder) order.push_back(b);
     g.setOrder(std::move(order));
 
@@ -574,6 +674,45 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
             res.insert(base + "depth", {static_cast<uint16_t>(ti), kSlotLfo, static_cast<uint16_t>(li * 4 + kLfoDepth)});
             res.insert(base + "hz", {static_cast<uint16_t>(ti), kSlotLfo, static_cast<uint16_t>(li * 4 + kLfoHz)});
             res.insert(base + "phase", {static_cast<uint16_t>(ti), kSlotLfo, static_cast<uint16_t>(li * 4 + kLfoPhase)});
+        }
+        for (size_t mi = 0; mi < t.morph.size(); ++mi) {   // morph maps (B5): the stick is a live parameter; targets resolve like any modulation target
+            const auto& ms = t.morph[mi];
+            const std::string base = t.id + "|morph" + std::to_string(mi) + "|";
+            res.insert(base + "x", {static_cast<uint16_t>(ti), kSlotMorph, static_cast<uint16_t>(mi * 4 + kMorphX)});
+            res.insert(base + "y", {static_cast<uint16_t>(ti), kSlotMorph, static_cast<uint16_t>(mi * 4 + kMorphY)});
+            if (!ms.on) continue;
+            const std::string where = "track " + t.id + " morph map " + std::to_string(mi);
+            ModState::MorphState st;
+            st.track = static_cast<uint16_t>(ti);
+            st.idx = static_cast<uint16_t>(mi);
+            st.x = st.sx = std::clamp(static_cast<float>(ms.x), 0.0f, 1.0f);
+            st.y = st.sy = std::clamp(static_cast<float>(ms.y), 0.0f, 1.0f);
+            st.method = ms.method == "rbf" ? dsp::MorphMethod::Rbf : dsp::MorphMethod::Idw;
+            st.power = static_cast<float>(ms.power);
+            st.width = static_cast<float>(ms.width);
+            std::vector<size_t> kept;           // the columns (targets) that resolved
+            std::vector<float> baseUnit;        // where each one sits now: what a missing anchor value falls back to
+            for (size_t k = 0; k < ms.targets.size(); ++k) {
+                const auto& tg = ms.targets[k];
+                if (tg.dest.empty() || tg.pkey.empty() || tg.dest == "macro" || tg.dest == "midi" || tg.dest == "lfo") { issues.insert(where + ": target " + std::to_string(k) + " is not a parameter"); continue; }
+                const auto lf = leaf(ti, tg.dest, tg.fxId, tg.pkey);
+                if (!lf) { issues.insert(where + ": target '" + tg.pkey + "' not found"); continue; }
+                ModState::MorphTarget mt;
+                mt.addr = lf->addr; mt.min = lf->min; mt.max = lf->max; mt.log = lf->log;
+                mt.curve = k < ms.curves.size() ? static_cast<float>(ms.curves[k]) : 1.0f;
+                st.targets.push_back(mt);
+                kept.push_back(k);
+                const float span = lf->log ? std::log(lf->max) - std::log(lf->min) : lf->max - lf->min;
+                baseUnit.push_back(span > 0.0f ? std::clamp((lf->log ? std::log(std::max(lf->base, lf->min)) - std::log(lf->min) : lf->base - lf->min) / span, 0.0f, 1.0f) : 0.0f);
+            }
+            if (kept.empty() || ms.anchors.empty()) continue;
+            for (const auto& a : ms.anchors) {
+                st.ax.push_back(std::clamp(static_cast<float>(a.x), 0.0f, 1.0f));
+                st.ay.push_back(std::clamp(static_cast<float>(a.y), 0.0f, 1.0f));
+                for (size_t c = 0; c < kept.size(); ++c) st.au.push_back(kept[c] < a.values.size() ? std::clamp(static_cast<float>(a.values[kept[c]]), 0.0f, 1.0f) : baseUnit[c]);
+            }
+            st.w.assign(st.ax.size(), 0.0f);
+            mod->morphs.push_back(std::move(st));
         }
         for (const auto& pf : t.perf) {   // performance routes: the same targets as an LFO's, driven by the tracker
             if (!pf.on) continue;

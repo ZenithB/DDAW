@@ -3,6 +3,7 @@
 // a chunk lasts. For finding the devices that dominate the audio thread's worst case (see ddaw_swapbench, ddaw_soak).
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -35,7 +36,7 @@ int main() {
     const ProcessContext ctx{sr, 0.0, 120.0, true, false, 0.0, 0.0, 4, 4};
     std::vector<float> l(kMaxBlock), r(kMaxBlock);
     std::vector<Result> res;
-    const char* insts[] = {"drum", "duo", "fm", "follow", "granular", "keys", "ksampler", "mono", "pluck", "poly", "sampler"};
+    const char* insts[] = {"drum", "duo", "fm", "fmop", "follow", "granular", "keys", "ksampler", "mono", "pluck", "poly", "sampler"};
     const char* fxs[] = {"autofilt", "autopan", "autotune", "cheby", "chorus", "comp", "crush", "delay", "dist", "duck", "eq", "eq7", "filter", "gate",
                          "mbcomp", "opto", "phaser", "pingpong", "plate", "reverb", "shift", "trem", "vib", "widen"};
     for (const char* t : insts) {

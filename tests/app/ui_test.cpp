@@ -758,3 +758,482 @@ TEST_CASE("modulation panel: LFOs, macros and automation lanes are edited from t
     r.m->undo(); r.m->undo(); r.m->undo();
     CHECK(c.getWidth() > 100);
 }
+
+#include "app/ui/AudioRatePanel.h"
+
+TEST_CASE("audio-rate panel: routes are added, retargeted and edited live from the panel", "[ui][modulation][arate]") {
+    Rig r; r.demo();
+    const auto chords = r.m->project().tracks[2].uid;
+    r.m->selectTrack(chords);
+    project::DeviceSpec fmop; fmop.type = "fmop";
+    REQUIRE(r.m->apply({"inst.set", {{"track", chords}, {"device", project::deviceToJson(fmop, true)}}}));
+    ui::AudioRatePanel panel(*r.m);
+    panel.setSize(900, 300);
+    CHECK(panel.rows() == 0);
+
+    panel.addRoute();                                              // what the "+ Route" chip does
+    panel.refresh(app::ModelEvent::Document);
+    REQUIRE(panel.rows() == 1);
+    CHECK(r.m->project().tracks[2].arate.size() == 1);
+    CHECK(r.m->project().tracks[2].arate[0].source == "osc");
+
+    // retarget it to the instrument's amp port (the picker's choice), through the same command
+    auto spec = r.m->project().tracks[2].arate[0];
+    spec.target = {"inst", "inst", "amp"};
+    REQUIRE(r.m->apply({"arate.edit", {{"track", chords}, {"index", 0}, {"arate", project::arateToJson(spec)}}}));
+    panel.refresh(app::ModelEvent::Document);
+    CHECK(panel.row(0).targetChip().text().containsIgnoreCase("amp"));
+
+    // source and shape chips cycle; each is a structural edit
+    Mouse(panel.row(0).shapeChip()).click(pt(10, 10));
+    CHECK(r.m->project().tracks[2].arate[0].shape == 1);
+    Mouse(panel.row(0).sourceChip()).click(pt(10, 10));
+    panel.refresh(app::ModelEvent::Document);
+    CHECK(r.m->project().tracks[2].arate[0].source == "track");
+    CHECK(panel.row(0).trackChip().isVisible());
+    CHECK(! panel.row(0).shapeChip().isVisible());
+    Mouse(panel.row(0).sourceChip()).click(pt(10, 10));
+    panel.refresh(app::ModelEvent::Document);
+    CHECK(r.m->project().tracks[2].arate[0].source == "osc");
+
+    // depth is a live knob: one undo step per drag, and no rebuild needed
+    const double before = r.m->project().tracks[2].arate[0].depth;
+    {
+        Mouse m(panel.row(0).depthKnob());
+        m.down(pt(25, 40)).drag(pt(25, 10)).drag(pt(25, -30)).up(pt(25, -30));
+    }
+    CHECK(r.m->project().tracks[2].arate[0].depth > before);
+    r.m->undo();
+    CHECK(r.m->project().tracks[2].arate[0].depth == Approx(before));
+
+    // the rate is a live field too, clamped
+    REQUIRE(r.m->apply({"arate.field", {{"track", chords}, {"index", 0}, {"field", "hz"}, {"value", 440.0}}}));
+    CHECK(r.m->project().tracks[2].arate[0].hz == Approx(440.0));
+    REQUIRE(r.m->apply({"arate.field", {{"track", chords}, {"index", 0}, {"field", "hz"}, {"value", 1e9}}}));
+    CHECK(r.m->project().tracks[2].arate[0].hz == Approx(12000.0));
+
+    // remove, and undo/redo restore it
+    REQUIRE(r.m->apply({"arate.remove", {{"track", chords}, {"index", 0}}}));
+    panel.refresh(app::ModelEvent::Document);
+    CHECK(panel.rows() == 0);
+    r.m->undo();
+    panel.refresh(app::ModelEvent::Document);
+    CHECK(panel.rows() == 1);
+}
+
+TEST_CASE("audio-rate routes survive save and load", "[ui][arate]") {
+    Rig r; r.demo();
+    const auto chords = r.m->project().tracks[2].uid;
+    project::ARateSpec a; a.id = "ar1"; a.source = "track"; a.srcTrack = r.m->project().tracks[0].id; a.follow = true; a.attackMs = 3; a.releaseMs = 120;
+    a.depth = -0.4; a.target = {"inst", "inst", "index"};
+    REQUIRE(r.m->apply({"arate.insert", {{"track", chords}, {"index", 0}, {"arate", project::arateToJson(a)}}}));
+    const auto j = project::trackToJson(r.m->project().tracks[2]);
+    REQUIRE(j.contains("arate"));
+    const auto back = project::trackFromJson(j);
+    REQUIRE(back.arate.size() == 1);
+    CHECK(back.arate[0].source == "track");
+    CHECK(back.arate[0].srcTrack == a.srcTrack);
+    CHECK(back.arate[0].follow);
+    CHECK(back.arate[0].depth == Approx(-0.4));
+    CHECK(back.arate[0].attackMs == Approx(3.0));
+    CHECK(back.arate[0].releaseMs == Approx(120.0));
+    CHECK(back.arate[0].target.pkey == "index");
+}
+
+#include "app/ui/MorphPanel.h"
+
+TEST_CASE("morph panel: maps, targets and anchors are built from the panel, and the stick is live and undoable", "[ui][morph]") {
+    Rig r; r.demo();
+    const auto chords = r.m->project().tracks[2].uid;
+    r.m->selectTrack(chords);
+    project::DeviceSpec fmop; fmop.type = "fmop";
+    REQUIRE(r.m->apply({"inst.set", {{"track", chords}, {"device", project::deviceToJson(fmop, true)}}}));
+    ui::MorphPanel panel(*r.m);
+    panel.setSize(1100, 320);
+    CHECK(panel.current() == nullptr);
+
+    panel.addMap();                                                   // "+ Map"
+    REQUIRE(panel.current() != nullptr);
+    CHECK(r.m->project().tracks[2].morph.size() == 1);
+
+    // targets come from the picker; give it the same data the picker menu produces
+    const auto* info = app::findDevice(app::Chain::Instrument, "fmop");
+    REQUIRE(info != nullptr);
+    const auto specOf = [&](const char* key) { for (const auto& ps : info->params) if (std::string(ps.key) == key) return ps; return ParamSpec{}; };
+    panel.addTarget({"inst", "inst", "r1", "R1", specOf("r1"), 1.0});
+    panel.addTarget({"inst", "inst", "l1", "L1", specOf("l1"), 1.0});
+    panel.addTarget({"inst", "inst", "l1", "L1", specOf("l1"), 1.0});    // a duplicate is ignored
+    REQUIRE(r.m->project().tracks[2].morph[0].targets.size() == 2);
+    CHECK(r.m->project().tracks[2].morph[0].curves.size() == 2);
+
+    // an anchor captures the targets' current (stored) values: r1 = 1 is 1/3 of its log range, l1 = 1 is the top
+    panel.addAnchorHere();
+    {
+        const auto& a = r.m->project().tracks[2].morph[0].anchors;
+        REQUIRE(a.size() == 1);
+        CHECK(a[0].x == Approx(0.5));
+        REQUIRE(a[0].values.size() == 2);
+        CHECK(a[0].values[0] == Approx(std::log(4.0) / std::log(64.0)).margin(1e-3));
+        CHECK(a[0].values[1] == Approx(1.0).margin(1e-3));
+    }
+
+    // dragging the stick moves it live (no rebuild), as one undo step
+    auto& pad = panel.pad();
+    {
+        const auto from = pad.toPixel(0.5, 0.5), to = pad.toPixel(0.85, 0.2);
+        Mouse m(pad);
+        m.down(pt(from.x + 40, from.y + 40)).drag(pt(to.x, to.y)).up(pt(to.x, to.y));   // (not on the anchor: the stick follows)
+    }
+    CHECK(r.m->project().tracks[2].morph[0].x == Approx(0.85).margin(0.01));
+    CHECK(r.m->project().tracks[2].morph[0].y == Approx(0.2).margin(0.01));
+    r.m->undo();
+    CHECK(r.m->project().tracks[2].morph[0].x == Approx(0.5).margin(0.01));
+
+    // dragging an anchor moves it (committed on release); the stick stays
+    {
+        const auto a = pad.toPixel(0.5, 0.5), to = pad.toPixel(0.25, 0.75);
+        Mouse m(pad);
+        m.down(pt(a.x, a.y)).drag(pt(to.x, to.y)).up(pt(to.x, to.y));
+    }
+    CHECK(r.m->project().tracks[2].morph[0].anchors[0].x == Approx(0.25).margin(0.01));
+    CHECK(r.m->project().tracks[2].morph[0].anchors[0].y == Approx(0.75).margin(0.01));
+    CHECK(r.m->project().tracks[2].morph[0].x == Approx(0.5).margin(0.01));
+    CHECK(panel.selectedAnchor() == 0);
+
+    // capture re-reads the parameters into the selected anchor; delete removes it
+    REQUIRE(r.m->apply(document::cmd::setParam(r.m->project().tracks[2].inst.uid, "l1", 0.5)));
+    panel.captureIntoSelected();
+    CHECK(r.m->project().tracks[2].morph[0].anchors[0].values[1] == Approx(0.5).margin(1e-3));
+    panel.removeSelectedAnchor();
+    CHECK(r.m->project().tracks[2].morph[0].anchors.empty());
+
+    // a target added after anchors exist gives every anchor a value for it
+    panel.addAnchorHere();
+    panel.addTarget({"inst", "inst", "index", "Index", specOf("index"), 2.0});
+    CHECK(r.m->project().tracks[2].morph[0].anchors[0].values.size() == 3);
+
+    // the method chip flips between IDW and RBF, the ON chip switches the map off
+    CHECK(r.m->project().tracks[2].morph[0].method == "idw");
+    Mouse(panel.methodChip()).click(pt(10, 10));
+    CHECK(r.m->project().tracks[2].morph[0].method == "rbf");
+    Mouse(panel.methodChip()).click(pt(10, 10));
+    CHECK(r.m->project().tracks[2].morph[0].method == "idw");
+    Mouse(panel.onChip()).click(pt(10, 10));
+    CHECK(! r.m->project().tracks[2].morph[0].on);
+}
+
+TEST_CASE("morph maps survive save and load", "[ui][morph]") {
+    Rig r; r.demo();
+    const auto chords = r.m->project().tracks[2].uid;
+    project::MorphSpec m;
+    m.name = "Space"; m.x = 0.3; m.y = 0.7; m.method = "rbf"; m.width = 0.25; m.power = 3;
+    m.targets = {{"inst", "inst", "cutoff"}, {"fx", r.m->project().tracks[2].fx[0].id, "mix"}};
+    m.curves = {0.5, 2.0};
+    m.anchors = {{"dark", 0.1, 0.1, {0.1, 0.0}}, {"bright", 0.9, 0.8, {0.9, 0.7}}};
+    REQUIRE(r.m->apply({"morph.insert", {{"track", chords}, {"index", 0}, {"morph", project::morphToJson(m)}}}));
+    const auto back = project::trackFromJson(project::trackToJson(r.m->project().tracks[2]));
+    REQUIRE(back.morph.size() == 1);
+    const auto& b = back.morph[0];
+    CHECK(b.name == "Space");
+    CHECK(b.method == "rbf");
+    CHECK(b.width == Approx(0.25));
+    CHECK(b.x == Approx(0.3));
+    REQUIRE(b.targets.size() == 2);
+    CHECK(b.targets[1].fxId == m.targets[1].fxId);
+    CHECK(b.curves == std::vector<double>{0.5, 2.0});
+    REQUIRE(b.anchors.size() == 2);
+    CHECK(b.anchors[1].name == "bright");
+    CHECK(b.anchors[1].values == std::vector<double>{0.9, 0.7});
+}
+
+#include "app/ui/ControllerInput.h"
+#include "app/ui/LiveInput.h"
+
+TEST_CASE("controllers: learn from the panel, gamepad and MIDI values reach the stick", "[ui][morph][controllers]") {
+    Rig r; r.demo();
+    const auto chords = r.m->project().tracks[2].uid;
+    const std::string cid = r.m->project().tracks[2].id;
+    r.m->selectTrack(chords);
+    project::MorphSpec map; map.name = "m"; map.targets = {{"inst", "inst", "cutoff"}};
+    map.anchors = {{"lo", 0.1, 0.5, {0.1}}, {"hi", 0.9, 0.5, {0.9}}};
+    REQUIRE(r.m->apply({"morph.insert", {{"track", chords}, {"index", 0}, {"morph", project::morphToJson(map)}}}));
+    ui::LiveInput live(*r.m);
+    ui::ControllerInput controllers(*r.m, live);
+    ui::MorphPanel panel(*r.m, &controllers);
+    panel.setSize(1100, 340);
+
+    // "Learn X": the next clear movement of any control becomes the binding
+    Mouse(panel.learnXChip()).click(pt(10, 10));
+    CHECK(r.m->learnTarget() == app::morphTarget(cid, 0, 'x'));
+    controllers.feed("pad:rx", 0.5);
+    controllers.feed("pad:rx", 0.95);
+    CHECK(r.m->learnTarget().empty());
+    panel.refresh(app::ModelEvent::Document);
+    REQUIRE(r.m->project().bindings.size() == 1);
+    CHECK(r.m->project().bindings[0].source == "pad:rx");
+    CHECK(panel.bindingRows() == 1);
+
+    // a stubbed gamepad reading: stick right = 1.0, centred (inside the deadzone) = 0.5
+    app::GamepadState s; s.connected = true; s.name = "Test pad"; s.rx = 1.0f;
+    controllers.setPadOverride(&s);
+    controllers.pollOnce();
+    CHECK(r.m->project().tracks[2].morph[0].x == Approx(1.0));
+    s.rx = 0.05f;
+    controllers.pollOnce();
+    CHECK(r.m->project().tracks[2].morph[0].x == Approx(0.5));
+    s.rx = -1.0f;
+    controllers.pollOnce();
+    CHECK(r.m->project().tracks[2].morph[0].x == Approx(0.0));
+    CHECK(controllers.padConnected());
+    controllers.setPadOverride(nullptr);
+
+    // a MIDI CC reaches a binding through LiveInput's table
+    project::ControlBinding b; b.source = "midi:cc74"; b.target = app::morphTarget(cid, 0, 'y');
+    REQUIRE(r.m->apply({"binding.insert", {{"index", 1}, {"binding", project::bindingToJson(b)}}}));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::controllerEvent(1, 74, 127));
+    controllers.pollOnce();
+    CHECK(r.m->project().tracks[2].morph[0].y == Approx(1.0));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::controllerEvent(1, 74, 0));
+    controllers.pollOnce();
+    CHECK(r.m->project().tracks[2].morph[0].y == Approx(0.0));
+
+    // removing a binding from the panel
+    panel.refresh(app::ModelEvent::Document);
+    REQUIRE(panel.bindingRows() == 2);
+}
+
+TEST_CASE("gamepad: the GameController backend can be polled with or without controllers attached", "[ui][controllers]") {
+    app::GamepadInput pad;
+    for (int i = 0; i < 5; ++i) {
+        const auto pads = pad.poll();                    // no hardware is needed: with none connected this is an empty list
+        CHECK(pads.size() <= app::GamepadInput::kMaxPads);
+        for (const auto& s : pads) { CHECK(s.connected); CHECK(s.lx >= -1.0f); CHECK(s.lx <= 1.0f); CHECK(s.lt >= 0.0f); CHECK(s.lt <= 1.0f); }
+    }
+}
+
+TEST_CASE("gamepad: rumble is safe without hardware, and a learned control is acknowledged", "[ui][controllers]") {
+    app::GamepadInput pad;
+    CHECK_FALSE(pad.rumble(99));                         // there is no pad 99, whatever is plugged in
+    Rig r; r.demo();
+    const auto chords = r.m->project().tracks[2].uid;
+    r.m->selectTrack(chords);
+    project::MorphSpec map; map.name = "m"; map.targets = {{"inst", "inst", "cutoff"}};
+    map.anchors = {{"lo", 0.1, 0.5, {0.1}}, {"hi", 0.9, 0.5, {0.9}}};
+    REQUIRE(r.m->apply({"morph.insert", {{"track", chords}, {"index", 0}, {"morph", project::morphToJson(map)}}}));
+    ui::LiveInput live(*r.m);
+    ui::ControllerInput controllers(*r.m, live);
+    controllers.feed("pad:lx", 0.5);                     // not learning: no pulse
+    CHECK(controllers.pulses() == 0);
+    r.m->startLearn(app::morphTarget(r.m->project().tracks[2].id, 0, 'x'));
+    controllers.feed("pad2:rt", 0.0);
+    controllers.feed("pad2:rt", 1.0);                    // the control that just got bound is on pad 2
+    CHECK(controllers.pulses() == 1);
+    CHECK(r.m->project().bindings.size() == 1);
+    controllers.feed("pad2:rt", 0.3);                    // ordinary use afterwards: no more pulses
+    CHECK(controllers.pulses() == 1);
+}
+
+TEST_CASE("controllers: several gamepads are separate sources, the first keeping the plain name", "[ui][controllers]") {
+    Rig r; r.demo();
+    const std::string cid = r.m->project().tracks[2].id;
+    const auto chords = r.m->project().tracks[2].uid;
+    r.m->selectTrack(chords);
+    project::MorphSpec map; map.name = "m"; map.targets = {{"inst", "inst", "cutoff"}};
+    map.anchors = {{"lo", 0.1, 0.5, {0.1}}, {"hi", 0.9, 0.5, {0.9}}};
+    REQUIRE(r.m->apply({"morph.insert", {{"track", chords}, {"index", 0}, {"morph", project::morphToJson(map)}}}));
+    for (const auto& [src, axis] : {std::pair{"pad:lx", 'x'}, std::pair{"pad2:lx", 'y'}}) {
+        project::ControlBinding b; b.source = src; b.target = app::morphTarget(cid, 0, axis);
+        REQUIRE(r.m->apply({"binding.insert", {{"index", r.m->project().bindings.size()}, {"binding", project::bindingToJson(b)}}}));
+    }
+    ui::LiveInput live(*r.m);
+    ui::ControllerInput controllers(*r.m, live);
+    std::vector<app::GamepadState> pads(2);
+    pads[0].connected = pads[1].connected = true;
+    pads[0].name = "First"; pads[1].name = "Second";
+    pads[0].lx = 1.0f;       // pad one's stick all the way right: X = 1
+    pads[1].lx = -1.0f;      // pad two's all the way left: Y = 0
+    controllers.setPadsOverride(&pads);
+    controllers.pollOnce();
+    CHECK(controllers.padCount() == 2);
+    CHECK(controllers.padName(1) == "Second");
+    CHECK(r.m->project().tracks[2].morph[0].x == Approx(1.0));
+    CHECK(r.m->project().tracks[2].morph[0].y == Approx(0.0));
+    pads[1].lx = 1.0f;
+    controllers.pollOnce();
+    CHECK(r.m->project().tracks[2].morph[0].y == Approx(1.0));
+    // unplugging pad two leaves its binding idle, pad one still works
+    pads.pop_back();
+    pads[0].lx = 0.0f;
+    controllers.pollOnce();
+    CHECK(controllers.padCount() == 1);
+    CHECK(r.m->project().tracks[2].morph[0].x == Approx(0.5));
+    CHECK(r.m->project().tracks[2].morph[0].y == Approx(1.0));
+    CHECK(app::describeSource("pad:lx") == "Left stick X");
+    CHECK(app::describeSource("pad3:rt") == "Pad 3 Right trigger");
+}
+
+#include "dsp/Fft.h"
+
+namespace {
+// strongest spectral component of the last 16384 samples inside [lo, hi] Hz, parabolic-interpolated
+double peakNear(const std::vector<float>& x, double lo, double hi, double sr = 48000.0) {
+    constexpr size_t N = 16384;
+    dsp::Fft f; f.prepare(int(N));
+    std::vector<double> re(N), im(N, 0.0), m(N / 2);
+    for (size_t i = 0; i < N; ++i) re[i] = double(x[x.size() - N + i]) * (0.5 - 0.5 * std::cos(2.0 * 3.14159265358979 * double(i) / N));
+    f.forward(re.data(), im.data());
+    for (size_t k = 0; k < N / 2; ++k) m[k] = std::hypot(re[k], im[k]);
+    size_t best = size_t(lo / sr * N);
+    for (size_t k = size_t(lo / sr * N); k <= size_t(hi / sr * N); ++k) if (m[k] > m[best]) best = k;
+    const double a = std::log(m[best - 1] + 1e-12), b = std::log(m[best] + 1e-12), c = std::log(m[best + 1] + 1e-12);
+    return (double(best) + 0.5 * (a - c) / (a - 2.0 * b + c)) * sr / double(N);
+}
+double energyNear(const std::vector<float>& x, double hz, double sr = 48000.0) {
+    constexpr size_t N = 16384;
+    dsp::Fft f; f.prepare(int(N));
+    std::vector<double> re(N), im(N, 0.0);
+    for (size_t i = 0; i < N; ++i) re[i] = double(x[x.size() - N + i]) * (0.5 - 0.5 * std::cos(2.0 * 3.14159265358979 * double(i) / N));
+    f.forward(re.data(), im.data());
+    const int k0 = int(std::lround(hz / sr * N));
+    double best = 0;
+    for (int k = k0 - 3; k <= k0 + 3; ++k) best = std::max(best, std::hypot(re[size_t(k)], im[size_t(k)]));
+    return best;
+}
+}  // namespace
+
+TEST_CASE("MPE through the MIDI input: per-channel notes bend alone, the master channel bends all, expression before the note-on counts", "[ui][midi][mpe]") {
+    Rig r;   // an empty project with one clean synth track (no effects to colour the measurement)
+    REQUIRE(r.m->apply(edit::addTrack(r.m->project(), project::TrackKind::Synth)));
+    const auto chords = r.m->project().tracks[0].uid;
+    project::DeviceSpec fmop; fmop.type = "fmop";
+    fmop.params = {{"algo", 4}, {"l1", 1}, {"l2", 0}, {"l3", 0}, {"l4", 0}, {"attack", 0.001}, {"sustain", 1.0}, {"release", 0.02}};
+    REQUIRE(r.m->apply({"inst.set", {{"track", chords}, {"device", project::deviceToJson(fmop, true)}}}));
+    r.m->selectTrack(chords);
+    std::vector<float> l(128u), rr(128u);
+    // the builder is busy until the audio side swaps the new graph in, so the engine must run while we wait
+    for (int i = 0; i < 2000 && r.m->service().busy(); ++i) { r.eng.process(l.data(), rr.data(), 128); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    REQUIRE(!r.m->service().busy());
+    r.m->tick();
+    ui::LiveInput live(*r.m);
+    const auto run = [&](int blocks) {
+        std::vector<float> out;
+        for (int b = 0; b < blocks; ++b) { r.eng.process(l.data(), rr.data(), 128); out.insert(out.end(), l.begin(), l.end()); }
+        return out;
+    };
+    run(4);   // the rebuilt graph swaps in
+
+    // ---- MPE off: a bend wheel (any channel) bends every note by the bend range, 2 semitones by default ----
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::noteOn(1, 69, 0.9f));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::pitchWheel(1, 16383));
+    CHECK(peakNear(run(300), 400.0, 600.0) == Approx(440.0 * std::pow(2.0, 2.0 / 12.0)).margin(3.0));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::pitchWheel(1, 8192));
+    CHECK(peakNear(run(300), 400.0, 600.0) == Approx(440.0).margin(3.0));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::noteOff(1, 69));
+    run(50);
+
+    // ---- MPE on: member channels carry their own notes ----
+    r.m->setMpe(true);
+    r.m->setMpeRange(48.0f);
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::pitchWheel(2, 8192 + 2048));    // channel 2's bend BEFORE its note: +12 semitones
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::noteOn(2, 69, 0.9f));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::noteOn(3, 72, 0.9f));           // channel 3: no bend
+    const auto both = run(300);
+    CHECK(peakNear(both, 800.0, 960.0) == Approx(880.0).margin(5.0));                           // the A, an octave up
+    CHECK(peakNear(both, 500.0, 560.0) == Approx(523.25).margin(4.0));                          // the C, untouched
+    // bending channel 3 while it sounds moves the C only
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::pitchWheel(3, 8192 + 2048));
+    const auto moved = run(300);
+    CHECK(peakNear(moved, 1000.0, 1100.0) == Approx(1046.5).margin(6.0));
+    CHECK(peakNear(moved, 800.0, 960.0) == Approx(880.0).margin(5.0));
+    // pressure on a channel is that note's pressure: +50% level at full pressure
+    const double before = energyNear(moved, 880.0);
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::channelPressureChange(2, 127));
+    CHECK(energyNear(run(300), 880.0) / before == Approx(1.5).margin(0.08));
+    // the master channel (1) bends every note, by the (default 2 semitone) bend range
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::pitchWheel(1, 16383));
+    CHECK(peakNear(run(300), 900.0, 1000.0) == Approx(880.0 * std::pow(2.0, 2.0 / 12.0)).margin(6.0));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::pitchWheel(1, 8192));
+    // note-offs end the notes and their channels' note memory: a later bend on channel 2 touches no note
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::noteOff(2, 69));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::noteOff(3, 72));
+    run(60);
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::pitchWheel(2, 0));
+    CHECK_NOTHROW(run(10));
+
+    // polyphonic key pressure (non-MPE controllers) is one note's pressure
+    r.m->setMpe(false);
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::pitchWheel(2, 8192));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::noteOn(1, 69, 0.9f));
+    const auto base = run(300);
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::aftertouchChange(1, 69, 127));
+    CHECK(energyNear(run(300), 440.0) / energyNear(base, 440.0) == Approx(1.5).margin(0.08));
+    live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::allNotesOff(1));
+}
+
+TEST_CASE("MPE setup over MIDI: the configuration message sets the zones, the sensitivity RPN sets the ranges", "[ui][midi][mpe]") {
+    Rig r;
+    ui::LiveInput live(*r.m);
+    int refreshes = 0;
+    r.m->addListener([&](app::ModelEvent e) { if (e == app::ModelEvent::Recording) ++refreshes; });
+    const auto cc = [&](int ch, int n, int v) { live.handleIncomingMidiMessage(nullptr, juce::MidiMessage::controllerEvent(ch, n, v)); };
+    const auto rpn = [&](int ch, int msb, int lsb, int data, int dataLsb = -1) {
+        cc(ch, 101, msb); cc(ch, 100, lsb); cc(ch, 6, data);
+        if (dataLsb >= 0) cc(ch, 38, dataLsb);
+        cc(ch, 101, 127); cc(ch, 100, 127);   // RPN null
+    };
+
+    // switching MPE on by hand means "all channels but the first are members"
+    CHECK_FALSE(r.m->mpeMember(2));
+    r.m->setMpe(true);
+    CHECK(r.m->mpeMember(2));
+    CHECK(r.m->mpeMember(16));
+    CHECK_FALSE(r.m->mpeMember(1));
+
+    // MPE configuration message (RPN 6) on the master channel: the lower zone gets 4 member channels
+    rpn(1, 0, 6, 4);
+    CHECK(r.m->mpeLowerMembers() == 4);
+    CHECK(r.m->mpeMember(2));  CHECK(r.m->mpeMember(5));
+    CHECK_FALSE(r.m->mpeMember(6));                   // beyond the zone: an ordinary channel
+    CHECK_FALSE(r.m->mpeMember(1));
+    // and the upper zone (master 16) 3 members: channels 15, 14, 13
+    rpn(16, 0, 6, 3);
+    CHECK(r.m->mpeUpperMembers() == 3);
+    CHECK(r.m->mpeMember(13)); CHECK(r.m->mpeMember(15));
+    CHECK_FALSE(r.m->mpeMember(12));
+    CHECK_FALSE(r.m->mpeMember(16));
+    // the zones cannot overlap: asking for more than the channels left is cut to fit
+    rpn(1, 0, 6, 15);
+    CHECK(r.m->mpeLowerMembers() + r.m->mpeUpperMembers() <= 15);
+    // a configuration message on a channel that is not a master channel does nothing
+    const int lower = r.m->mpeLowerMembers();
+    rpn(7, 0, 6, 2);
+    CHECK(r.m->mpeLowerMembers() == lower);
+    // zero members disables a zone; both zones off turns MPE off
+    rpn(1, 0, 6, 4);
+    rpn(16, 0, 6, 3);
+    CHECK(r.m->mpeUpperMembers() == 3);
+    rpn(1, 0, 6, 0);
+    CHECK(r.m->mpeLowerMembers() == 0);
+    CHECK(r.m->mpe());
+    rpn(16, 0, 6, 0);
+    CHECK_FALSE(r.m->mpe());
+
+    // pitch bend sensitivity (RPN 0): semitones, plus cents from the LSB; a member channel sets the per-note range, otherwise the bend range
+    r.m->setMpeZones(15, 0);
+    r.m->setMpe(true);
+    rpn(2, 0, 0, 12);
+    CHECK(r.m->mpeRange() == Approx(12.0f));
+    rpn(1, 0, 0, 3, 50);
+    CHECK(r.m->bendRange() == Approx(3.5f));
+    rpn(1, 0, 0, 0, 40);                              // under a semitone: ignored
+    CHECK(r.m->bendRange() == Approx(3.5f));
+    rpn(1, 0, 0, 127);                                // the largest data byte: clamped to the limit
+    CHECK(r.m->bendRange() == Approx(96.0f));
+
+    // the UI hears about changes made on the MIDI thread at its next tick
+    const int before = refreshes;
+    r.m->tick();
+    CHECK(refreshes == before + 1);
+    r.m->tick();
+    CHECK(refreshes == before + 1);                   // once
+}

@@ -19,6 +19,11 @@ AppSettings loadSettings(const std::string& path) {
         s.recording.monitor = r.value("monitor", false);
         s.recording.recordCurves = r.value("recordCurves", false);
         s.inputMode = std::clamp(j.value("inputMode", 0), 0, 2);
+        s.mpe = j.value("mpe", false);
+        s.bendRange = std::clamp(j.value("bendRange", 2.0f), 1.0f, 96.0f);
+        s.mpeRange = std::clamp(j.value("mpeRange", 48.0f), 1.0f, 96.0f);
+        s.mpeLower = std::clamp(j.value("mpeLower", 15), 0, 15);
+        s.mpeUpper = std::clamp(j.value("mpeUpper", 0), 0, 15 - s.mpeLower);
     } catch (const std::exception&) {
         return AppSettings{};   // damaged: start clean rather than half-applied
     }
@@ -29,7 +34,7 @@ bool saveSettings(const std::string& path, const AppSettings& s) {
     try {
         std::filesystem::create_directories(std::filesystem::path(path).parent_path());
         nlohmann::json j = {{"recording", {{"offsetMs", s.recording.offsetMs}, {"countInBars", s.recording.countInBars}, {"monitor", s.recording.monitor}, {"recordCurves", s.recording.recordCurves}}},
-                            {"inputMode", s.inputMode}};
+                            {"inputMode", s.inputMode}, {"mpe", s.mpe}, {"bendRange", s.bendRange}, {"mpeRange", s.mpeRange}, {"mpeLower", s.mpeLower}, {"mpeUpper", s.mpeUpper}};
         std::ofstream out(path);
         out << j.dump(2);
         return bool(out);

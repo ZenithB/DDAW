@@ -31,9 +31,38 @@ namespace ddaw::engine {
 
 constexpr int kMaxMeterTrackSlots = kMaxMeterTracks;
 
+// Audio-rate modulation inputs of one device (B4): a buffer per A-rate parameter that has a route, handed to the
+// device as ModInputs. Sized at build; the pointers are refreshed every chunk and are null where nothing modulates.
+struct AModBufs {
+    std::vector<const float*> ptrs;           // by A-rate ordinal
+    std::vector<std::vector<float>> bufs;     // by A-rate ordinal; kMaxBlock floats where a route exists
+    void init(size_t numAudioRate) { ptrs.assign(numAudioRate, nullptr); bufs.assign(numAudioRate, {}); }
+    void ensure(size_t ordinal) { if (bufs[ordinal].empty()) bufs[ordinal].assign(size_t(kMaxBlock), 0.0f); }
+    ModInputs inputs() const noexcept { return ModInputs{std::span<const float* const>(ptrs.data(), ptrs.size())}; }
+};
+
+// One audio-rate modulation route, resolved at build (ProjectSpec ARateSpec). Rendered into its target device's
+// buffer once per chunk, after the source's own track has rendered.
+struct AudioRoute {
+    enum class Kind : uint8_t { Osc, Track };
+    Kind kind = Kind::Osc;
+    int shape = 0;
+    bool follow = false;
+    float hz = 220.0f, depth = 0.5f;
+    float halfRange = 1.0f;          // (max - min) / 2 of the target parameter
+    double phase = 0.0;              // Osc
+    int src = -1;                    // Track: the source strip
+    float atk = 0.0f, rel = 0.0f, env = 0.0f;   // follower coefficients and state
+    int specIndex = 0;               // position in the track's ARateSpec list (live edits address routes by it)
+    int dstTrack = 0;
+    int dstFx = -1;                  // -1: the track's instrument, else the effect index
+    size_t ordinal = 0;              // index among the target's A-rate parameters
+};
+
 struct FxSlot {
     std::unique_ptr<EffectDevice> dev;
     dsp::Smoother out;  // linear gain from the device's `out` (dB)
+    AModBufs mod;       // audio-rate inputs (empty when nothing is routed to this device)
 };
 
 struct TrackStrip {
@@ -50,6 +79,10 @@ struct TrackStrip {
     bool audible = true;
     bool monitorIn = false;                  // the live input is mixed in ahead of the effects
     std::unique_ptr<InstrumentDevice> inst;  // null on buses
+    AModBufs instMod;                        // audio-rate inputs of the instrument
+    std::vector<uint32_t> aroutes;           // indices (into the graph's route list) of routes that target this track
+    std::vector<float> tap;                  // mono mix after the effects, before pan/fader/mute; for routes that use this track as a source
+    bool tapped = false;
     dsp::Smoother instOut;
     std::vector<FxSlot> fx;
     dsp::Smoother pan, fader, muteGain, sendA, sendB;
@@ -89,6 +122,13 @@ struct DuckRoute {
     int pitch = -1;  // -1: any; otherwise the pad index (pitch % 8) that triggers it
 };
 
+// A note's expression curves (MPE), as scheduled: points are (ticks after the note's start, value), by dimension
+// 0 slide, 1 pressure, 2 pitch bend in semitones. Built with the graph; read-only on the audio thread.
+struct ExprSeq {
+    struct Pt { float t, v; };
+    std::array<std::vector<Pt>, 3> dim;
+};
+
 class Graph {
 public:
     Graph(uint32_t epoch, double sampleRate);
@@ -116,6 +156,12 @@ public:
     }
     void setLoop(bool on, double start, double end) { loopOn_ = on; loopStart_ = start; loopEnd_ = end; }
     void setModulation(std::unique_ptr<ModState> m) { mod_ = std::move(m); }
+    // Expression curves of scheduled notes (B5). Returns the index NoteEv::expr refers to.
+    int addExprSeq(ExprSeq s) { exprSeqs_.push_back(std::move(s)); return int(exprSeqs_.size()) - 1; }
+    // Audio-rate routes (B4). The route's target buffers must already be sized (AModBufs::init / ensure).
+    // Sources must render before their targets: the builder orders the tracks.
+    uint32_t addAudioRoute(const AudioRoute& r);
+    size_t audioRouteCount() const noexcept { return aroutes_.size(); }
     void finalize();  // computes delay compensation; call once after the last add*
 
     // ---- audio side (real-time safe) ----
@@ -134,6 +180,7 @@ public:
     void noteOn(uint16_t track, uint8_t pitch, float vel, uint32_t noteId) noexcept;
     void noteOff(uint16_t track, uint32_t noteId) noexcept;
     void performance(uint16_t track, const PerformanceFrame& f) noexcept;
+    void noteExpression(uint16_t track, uint32_t noteId, int dimension, float value) noexcept { if (track < tracks_.size() && tracks_[track].inst) tracks_[track].inst->noteExpression(noteId, dimension, value); }
     // Live input monitoring: `l`/`r` (n frames, valid for the next process() call, or null) are mixed
     // into every track that has monitoring on, ahead of its effects.
     void setMonitorInput(const float* l, const float* r) noexcept { monL_ = l; monR_ = r; }
@@ -142,6 +189,11 @@ public:
     // Graph swap: keep monitoring switched on for the tracks that had it.
     void inheritMonitors(const Graph& old) noexcept { for (size_t i = 0; i < tracks_.size() && i < old.tracks_.size(); ++i) tracks_[i].monitorIn = old.tracks_[i].monitorIn; }
     void allNotesOff() noexcept;
+    // A scheduled note with expression curves has just started at transport tick `startTick`: play them while it lasts
+    // (`durTicks`). updateExpression(now) sends each playing note's curve values for the chunk about to render.
+    void startExpression(uint16_t track, uint32_t noteId, double startTick, double durTicks, int seq) noexcept;
+    void updateExpression(double nowTick) noexcept;
+    void clearExpression() noexcept { nPlayers_ = 0; }
 
     // ---- scheduling (driven by the Engine) ----
     const SchedParams& schedParams() const noexcept { return sched_; }
@@ -188,6 +240,9 @@ private:
     int sendABus_ = -1, sendBBus_ = -1;
     std::vector<DuckRoute> ducks_;
     std::unique_ptr<ModState> mod_;
+    std::vector<AudioRoute> aroutes_;
+    double invSr_ = 1.0 / 44100.0;
+    void renderRoutes(TrackStrip& t, int n) noexcept;
     dsp::Smoother masterGain_;
     SchedParams sched_;
     double launchQ_ = 1, loopStart_ = 0, loopEnd_ = 4 * 384;
@@ -196,6 +251,11 @@ private:
     std::vector<float> mixL_, mixR_, tmpL_, tmpR_;
     std::array<Active, kMaxActive> active_{};
     size_t nActive_ = 0;
+    struct ExprPlayer { uint16_t track; uint32_t noteId; double start, end; int seq; std::array<float, 3> last; std::array<uint32_t, 3> idx; };
+    static constexpr size_t kMaxExprPlayers = 32;
+    std::vector<ExprSeq> exprSeqs_;
+    std::array<ExprPlayer, kMaxExprPlayers> players_{};
+    size_t nPlayers_ = 0;
     std::array<Gate, kMaxGates> gates_{};
     size_t nGates_ = 0;
 };

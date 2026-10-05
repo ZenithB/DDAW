@@ -1,0 +1,79 @@
+name: nightly
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# The slow and timing-sensitive checks: the 30-minute soak, the swap benchmark, the whole suite (timing tests
+# excluded) under UBSan with libc++ hardening, and ThreadSanitizer / AddressSanitizer on Linux.
+jobs:
+  soak:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: brew install ninja
+      - name: Configure and build the tools
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDDAW_BUILD_APP=OFF -DDDAW_BUILD_TESTS=OFF
+          cmake --build build --target ddaw_soak ddaw_swapbench ddaw_devbench
+      - name: Soak (30 minutes of audio at a 64-frame buffer, accelerated)
+        run: ./build/ddaw_soak --minutes 30 | tee soak.txt
+      - name: Swap benchmark and per-device cost
+        run: |
+          ./build/ddaw_swapbench --seconds 20 | tee swapbench.txt
+          ./build/ddaw_devbench | tee devbench.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: soak-and-bench, path: "*.txt" }
+
+  hardened:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: brew install ninja
+      - name: Configure (UBSan + libc++ hardening)
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DDDAW_BUILD_APP=OFF \
+            -DCMAKE_CXX_FLAGS="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG -fsanitize=undefined -fno-sanitize-recover=undefined -g -O1"
+      - name: Build
+        run: cmake --build build
+      - name: Tests (the timing tests are meaningless in an unoptimised build; the Release soak job covers them)
+        run: ctest --test-dir build -LE timing --output-on-failure -j4
+
+  # ThreadSanitizer and AddressSanitizer do not run on the development Mac (the Apple clang 16 runtimes crash on macOS 26;
+  # Homebrew LLVM 20 too), so they run here on Linux. The core is portable C++ (no JUCE, no DDSP runtime); the DDSP
+  # worker handoff is covered by the SpscFloatRing tests, not by the instrument itself.
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      - name: Allow ThreadSanitizer's memory layout (newer kernels randomise too widely)
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Canary - ThreadSanitizer must flag a deliberate race, or this job proves nothing
+        run: |
+          cat > race.cpp <<'EOT'
+          #include <thread>
+          int x = 0;
+          int main() { std::thread a([] { x = 1; }); std::thread b([] { x = 2; }); a.join(); b.join(); return x; }
+          EOT
+          clang++ -std=c++20 -fsanitize=thread -g -O1 race.cpp -o race -pthread
+          if ./race 2> race.txt; then echo "the deliberate race was not reported"; cat race.txt; exit 1; fi
+          grep -q "data race" race.txt
+      - name: ThreadSanitizer - build
+        run: |
+          CC=clang CXX=clang++ cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DDDAW_BUILD_APP=OFF -DDDAW_BUILD_DDSP=OFF -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -O1"
+          cmake --build build-tsan
+      - name: ThreadSanitizer - the multi-threaded tests (ctest label `threads`)
+        run: TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1" ctest --test-dir build-tsan -L threads --output-on-failure
+      - name: AddressSanitizer + UBSan - build
+        run: |
+          CC=clang CXX=clang++ cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DDDAW_BUILD_APP=OFF -DDDAW_BUILD_DDSP=OFF -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g -O1"
+          cmake --build build-asan
+      - name: AddressSanitizer + UBSan - the whole suite except the timing tests
+        run: ctest --test-dir build-asan -LE timing --output-on-failure -j4

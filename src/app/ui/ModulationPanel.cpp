@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "app/model/Controllers.h"
 #include "app/ui/Dialogs.h"
 #include "app/ui/ParamPicker.h"
 #include "engine/Modulation.h"
@@ -102,10 +103,16 @@ private:
 class ModulationPanel::MacroRow : public juce::Component {
 public:
     MacroRow(app::AppModel& m, project::Uid track, int index) : model_(m), track_(track), idx_(index), value_(kMacroSpec, "Value") {
-        for (juce::Component* c : std::initializer_list<juce::Component*>{&value_, &targets_, &del_}) addAndMakeVisible(c);
+        for (juce::Component* c : std::initializer_list<juce::Component*>{&value_, &targets_, &learn_, &del_}) addAndMakeVisible(c);
         value_.onBegin = [this] { model_.beginGesture("macro"); };
         value_.onChange = [this](double v) { model_.apply({"macro.value", {{"track", track_}, {"index", idx_}, {"value", v}}}); };
         value_.onEnd = [this] { model_.endGesture(); };
+        learn_.onClick = [this] {
+            const auto* t = trackOf(model_, track_);
+            if (!t) return;
+            const auto target = app::macroTarget(t->id, idx_);
+            if (model_.learnTarget() == target) model_.cancelLearn(); else model_.startLearn(target);
+        };
         targets_.onClick = [this] { targetsMenu(); };
         del_.onClick = [this] { model_.apply({"macro.remove", {{"track", track_}, {"index", idx_}}}); };
         const auto& mc = trackOf(m, track)->macros[size_t(index)];
@@ -116,13 +123,22 @@ public:
         value_.setValue(mc.value);
         value_.setStored(true);
         targets_.setText(mc.targets.empty() ? juce::String("no targets") : juce::String(int(mc.targets.size())) + (mc.targets.size() == 1 ? " target" : " targets"));
+        // the controller bound to this knob, or "Learn" (lit while listening)
+        juce::String bound = "Learn";
+        if (const auto* t = trackOf(model_, track_)) {
+            const auto target = app::macroTarget(t->id, idx_);
+            for (const auto& b : model_.project().bindings) if (b.target == target) { bound = juce::String(app::describeSource(b.source)); break; }
+            learn_.setOn(model_.learnTarget() == target);
+        }
+        learn_.setText(model_.learnTarget().empty() || !learn_.isOn() ? bound : juce::String("listening..."));
         repaint();
     }
     void resized() override {
         auto r = getLocalBounds().reduced(4, 6);
         r.removeFromLeft(110);
         value_.setBounds(r.removeFromLeft(54)); r.removeFromLeft(8);
-        targets_.setBounds(r.removeFromLeft(80).withHeight(24).withY(r.getY() + 14)); r.removeFromLeft(6);
+        targets_.setBounds(r.removeFromLeft(80).withHeight(24).withY(r.getY() + 14)); r.removeFromLeft(4);
+        learn_.setBounds(r.removeFromLeft(100).withHeight(24).withY(r.getY() + 14)); r.removeFromLeft(4);
         del_.setBounds(r.removeFromLeft(22).withHeight(24).withY(r.getY() + 14));
     }
     void paint(juce::Graphics& g) override {
@@ -171,7 +187,7 @@ private:
     int idx_;
     std::string name_;
     Knob value_;
-    Chip targets_{"no targets"}, del_{"x"};
+    Chip targets_{"no targets"}, learn_{"Learn", col::rec}, del_{"x"};
 };
 
 // ============================================================ panel
@@ -206,6 +222,8 @@ juce::String ModulationPanel::signature() const {
     for (auto& l : t->lfos) s << juce::String(l.id) << ":" << l.shape << int(l.sync) << int(l.on) << int(std::lround(l.rate)) << ":" << int(l.targets.size()) << ",";
     s << "|";
     for (auto& mc : t->macros) s << juce::String(mc.name) << ":" << int(mc.targets.size()) << ",";
+    for (auto& b : model.project().bindings) s << juce::String(b.source) << ">" << juce::String(b.target) << ";";
+    s << "|" << juce::String(model.learnTarget());
     return s;
 }
 

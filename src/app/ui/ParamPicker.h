@@ -8,6 +8,8 @@
 
 namespace ddaw::ui {
 
+inline const project::Track* trackOf(app::AppModel& m, project::Uid uid) { return app::edit::findTrack(m.project(), uid); }
+
 struct PickedParam {
     std::string dest, fxId, pkey;   // the "dest|fxId|pkey" key of the modulation grammar
     juce::String label;             // "Cutoff (Poly Synth)"
@@ -16,7 +18,8 @@ struct PickedParam {
 };
 
 // Shows the menu next to `anchor`; `done` is called with the choice. Does nothing when the track is gone.
-void pickParam(app::AppModel& model, project::Uid track, juce::Component* anchor, std::function<void(const PickedParam&)> done);
+// `audioRateOnly` lists just the parameters that accept audio-rate modulation (ParamSpec::audioRate).
+void pickParam(app::AppModel& model, project::Uid track, juce::Component* anchor, std::function<void(const PickedParam&)> done, bool audioRateOnly = false);
 
 // A readable name for a target of `track`, e.g. "Cutoff" or "Reverb Mix" or "Volume".
 juce::String describeTarget(const project::Track& track, const project::ModTarget& t);

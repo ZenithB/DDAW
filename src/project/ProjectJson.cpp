@@ -67,6 +67,8 @@ json clipJson(const Clip& c) {
     for (auto& n : c.notes) {
         json jn = {{"p", n.pitch}, {"s", n.startTicks}, {"d", n.durTicks}, {"v", n.velocity}, {"pr", n.probability}};
         if (n.uid) jn["uid"] = n.uid;
+        for (const auto& [name, curve] : {std::pair<const char*, const std::vector<ExprPoint>*>{"bend", &n.bend}, {"slide", &n.slide}, {"pressure", &n.pressure}})
+            if (!curve->empty()) { json a = json::array(); for (auto& p : *curve) a.push_back({{"t", p.t}, {"v", p.v}}); jn[name] = a; }
         char key[16];
         std::snprintf(key, sizeof key, "n%06d", i++);  // zero-padded: JSON objects sort keys lexically, so key order = note order
         notes[key] = jn;
@@ -88,6 +90,19 @@ json clipJson(const Clip& c) {
 
 const char* kindName(TrackKind k) {
     switch (k) { case TrackKind::Drum: return "drum"; case TrackKind::Audio: return "audio"; case TrackKind::Bus: return "bus"; default: return "synth"; }
+}
+
+json arateJson(const ARateSpec& r) {
+    return {{"id", r.id}, {"on", r.on}, {"source", r.source}, {"shape", r.shape}, {"hz", r.hz}, {"track", r.srcTrack}, {"follow", r.follow},
+            {"attackMs", r.attackMs}, {"releaseMs", r.releaseMs}, {"depth", r.depth},
+            {"target", {{"dest", r.target.dest}, {"fxId", r.target.fxId}, {"pkey", r.target.pkey}}}};
+}
+
+json morphJson(const MorphSpec& m) {
+    json anchors = json::array();
+    for (auto& a : m.anchors) anchors.push_back({{"name", a.name}, {"x", a.x}, {"y", a.y}, {"values", a.values}});
+    return {{"name", m.name}, {"on", m.on}, {"x", m.x}, {"y", m.y}, {"method", m.method}, {"power", m.power}, {"width", m.width},
+            {"targets", targetsJson(m.targets)}, {"curves", m.curves}, {"anchors", anchors}};
 }
 
 json trackJson(const Track& t) {
@@ -128,6 +143,16 @@ json trackJson(const Track& t) {
         for (auto& pf : t.perf) a.push_back({{"source", pf.source}, {"min", pf.srcMin}, {"max", pf.srcMax}, {"on", pf.on}, {"rec", pf.record}, {"targets", targetsJson(pf.targets)}});
         j["perf"] = a;
     }
+    if (!t.arate.empty()) {
+        json a = json::array();
+        for (auto& r : t.arate) a.push_back(arateJson(r));
+        j["arate"] = a;
+    }
+    if (!t.morph.empty()) {
+        json a = json::array();
+        for (auto& m : t.morph) a.push_back(morphJson(m));
+        j["morph"] = a;
+    }
     if (!t.autoLanes.empty()) j["auto"] = autoJson(t.autoLanes);
     return j;
 }
@@ -144,6 +169,9 @@ json lfoToJson(const LfoSpec& l) {
     return jl;
 }
 json perfToJson(const PerfSpec& pf) { return {{"source", pf.source}, {"min", pf.srcMin}, {"max", pf.srcMax}, {"on", pf.on}, {"rec", pf.record}, {"targets", targetsJson(pf.targets)}}; }
+json arateToJson(const ARateSpec& r) { return arateJson(r); }
+json morphToJson(const MorphSpec& m) { return morphJson(m); }
+json bindingToJson(const ControlBinding& b) { return {{"source", b.source}, {"target", b.target}, {"min", b.min}, {"max", b.max}, {"invert", b.invert}}; }
 json macroToJson(const MacroSpec& m) { return {{"name", m.name}, {"value", m.value}, {"targets", targetsJson(m.targets)}}; }
 json pointsToJson(const std::vector<AutoPoint>& pts) {
     json a = json::array();
@@ -170,6 +198,11 @@ json projectToJson(const Project& p) {
         json a = json::array();
         for (auto& r : p.returns) a.push_back({{"id", r.id}, {"name", r.name}, {"fxType", r.fxType}, {"params", paramsJson(r.params)}, {"gain", r.gainDb}});
         j["returns"] = a;
+    }
+    if (!p.bindings.empty()) {
+        json a = json::array();
+        for (auto& b : p.bindings) a.push_back(bindingToJson(b));
+        j["bindings"] = a;
     }
     j["masterFx"] = devicesJson(p.masterFx);
     if (!p.masterAuto.empty()) j["masterAuto"] = autoJson(p.masterAuto);

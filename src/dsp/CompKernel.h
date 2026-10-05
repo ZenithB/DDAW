@@ -8,6 +8,7 @@
 // a constant-ratio dB slope. The node self-compensates with a makeup gain of (1/Saturate(1,k))^0.6,
 // so signals below threshold are amplified, exactly as in the browser. Detector: stereo-linked,
 // instant attack, ~2.5 ms release, adaptive release polynomial, and a 6 ms lookahead pre-delay.
+#include <algorithm>
 #include <array>
 #include <cstddef>
 

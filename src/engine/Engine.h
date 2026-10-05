@@ -120,10 +120,19 @@ public:
     // Any thread may call these (a producer lock serialises them; the audio side never waits). Notes play the
     // instrument of the live target track (a LiveTrack command) at the next chunk boundary. Polyphony is the
     // instrument's own. The sustain pedal holds released notes until it is lifted.
-    enum class LiveKind : uint8_t { NoteOn, NoteOff, SustainDown, SustainUp, AllOff };
+    enum class LiveKind : uint8_t { NoteOn, NoteOff, SustainDown, SustainUp, AllOff, Expression, BendAll };
     void liveNote(LiveKind kind, int pitch = 0, float velocity = 0.8f) noexcept;
+    // Per-note expression (MPE) for the live note on key `pitch`: dimension 0 slide (0..1), 1 pressure (0..1), 2 pitch bend in
+    // SEMITONES (signed). Remembered per key, so a controller that sends it before the note-on (MPE does) still shapes the
+    // note's start; a note that is not sounding just keeps the value for its next strike.
+    void liveExpression(int pitch, int dimension, float value) noexcept;
+    // Pitch bend for every live note on the target track (a bend wheel, or an MPE master channel), in semitones; it adds to a
+    // note's own bend and applies to notes struck later.
+    void liveBend(float semitones) noexcept;
     // Every live note the engine played, with its place on the timeline, for recording. Single consumer.
-    struct NoteRecord { double tick; uint32_t id; uint16_t track; uint8_t pitch; uint8_t on; float velocity; };
+    // on: 1 note on, 0 note off, 2 an expression value (`dim`: 0 slide, 1 pressure, 2 bend in semitones; `velocity` carries the
+    // value). Expression is echoed when it changes by a clear amount, and the values a note starts with are echoed with its note-on.
+    struct NoteRecord { double tick; uint32_t id; uint16_t track; uint8_t pitch; uint8_t on; float velocity; uint8_t dim = 0; };
     bool popNoteRecord(NoteRecord& out) noexcept { return noteRecQ_.pop(out); }
     int liveTrack() const noexcept { return liveTrack_.load(std::memory_order_relaxed); }
 
@@ -201,7 +210,7 @@ private:
     std::atomic<float> inputPeak_{0.0f};
     bool capturing_ = false;
     // live notes
-    struct LiveIn { LiveKind kind; uint8_t pitch; float vel; };
+    struct LiveIn { LiveKind kind; uint8_t pitch; float vel; uint8_t dim; };
     SpscFifo<LiveIn, 1024> liveQ_;
     std::atomic_flag liveLock_ = ATOMIC_FLAG_INIT;
     SpscFifo<NoteRecord, 2048> noteRecQ_;
@@ -210,6 +219,10 @@ private:
     uint32_t liveId_[128] = {};
     bool sustain_ = false;
     bool sustained_[128] = {};
+    float expr_[128][3] = {};      // the latest expression value per key (see liveExpression)
+    float bendAll_ = 0.0f;
+    void sendExpression(int tr, int pitch, int dim) noexcept;   // also echoes the value for recording
+    float exprEchoed_[128][3] = {};
     void drainLiveNotes() noexcept;
     void liveRelease(int pitch) noexcept;
     // tracking and monitoring

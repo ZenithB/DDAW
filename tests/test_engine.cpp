@@ -316,7 +316,7 @@ TEST_CASE("engine process does not allocate (commands, events, tone, limiter)", 
     CHECK(guard.count() == 0);
 }
 
-TEST_CASE("realtime budget at a 64-frame buffer, 8 tracks", "[engine][realtime]") {
+TEST_CASE("realtime budget at a 64-frame buffer, 8 tracks", "[engine][realtime][timing]") {
     std::string json = R"({"scope":{"kind":"scene","sceneId":"s"},"project":{"meta":{"bpm":150},"scenes":[{"id":"s"}],"tracks":[)";
     std::string clips;
     for (int t = 0; t < 8; ++t) {

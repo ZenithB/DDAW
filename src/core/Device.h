@@ -71,6 +71,8 @@ public:
     virtual void setParam(uint16_t index, float value) = 0;
     virtual void noteOn(uint8_t pitch, float velocity, uint32_t noteId) = 0;
     virtual void noteOff(uint32_t noteId) = 0;
+    // Per-note expression for a sounding note (MPE): dimension 0 slide / Y (0..1), 1 pressure (0..1), 2 pitch bend in
+    // SEMITONES (signed, already scaled by the controller's bend range). A value replaces the previous one; 0 is "neutral".
     virtual void noteExpression(uint32_t, int, float) {}
     virtual void performance(const PerformanceFrame&) {}  // note-less control
     // Control path (builder thread, before the graph is published): inject a decoded sample. Slot 0 is

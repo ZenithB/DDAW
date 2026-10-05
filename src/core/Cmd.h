@@ -15,6 +15,10 @@ constexpr uint8_t  kSlotMixer    = 0xFF;    // gain, pan, sends
 constexpr uint8_t  kSlotMacro    = 0xFE;    // a macro's value (param = macro index)
 constexpr uint8_t  kSlotLfo      = 0xFD;    // an LFO field (param = lfoIndex * 4 + field)
 constexpr uint16_t kLfoDepth = 0, kLfoHz = 1, kLfoPhase = 2;
+constexpr uint8_t  kSlotMorph    = 0xFB;    // a morph map's stick (param = mapIndex * 4 + field)
+constexpr uint16_t kMorphX = 0, kMorphY = 1;
+constexpr uint8_t  kSlotArate    = 0xFC;    // an audio-rate route field (param = routeIndex * 4 + field)
+constexpr uint16_t kArateDepth = 0, kArateHz = 1;
 constexpr uint16_t kParamOut     = 0xFFFF;  // device output gain (dB), not a ParamSpec
 
 // Mixer-slot parameter indices (slot kSlotMixer).

@@ -62,6 +62,14 @@ void ModState::setMacro(size_t track, uint16_t idx, float v) noexcept {
     for (auto& m : tracks[track].macros) if (m.idx == idx) m.value = std::clamp(v, 0.0f, 1.0f);
 }
 
+void ModState::setMorph(size_t track, size_t idx, uint16_t field, float v) noexcept {
+    for (auto& m : morphs)
+        if (m.track == track && m.idx == idx) {
+            const float c = std::clamp(v, 0.0f, 1.0f);
+            if (field == kMorphX) m.x = c; else if (field == kMorphY) m.y = c;
+        }
+}
+
 void ModState::setLfo(size_t track, size_t idx, uint16_t field, float v) noexcept {
     if (track >= tracks.size() || idx >= tracks[track].lfos.size()) return;
     auto& l = tracks[track].lfos[idx];
@@ -87,6 +95,25 @@ void ModState::applyRoute(Graph& g, const Route& rt, float v) noexcept {
 }
 
 void ModState::apply(Graph& g, double now, bool playing, TransportMode mode, int frames, const PerformanceFrame* perf) noexcept {
+    // morph maps first: the parameters they own are written before automation and LFOs, which win on a shared parameter
+    if (!morphs.empty()) {
+        const float a = 1.0f - std::exp(-float(std::min(double(frames) / sampleRate, 0.1)) / 0.025f);   // 25 ms stick smoothing
+        for (auto& m : morphs) {
+            m.sx += (m.x - m.sx) * a;
+            m.sy += (m.y - m.sy) * a;
+            const size_t nt = m.targets.size(), na = m.ax.size();
+            if (nt == 0 || na == 0) continue;
+            dsp::morphWeights(m.method, m.power, m.width, m.ax.data(), m.ay.data(), int(na), m.sx, m.sy, m.w.data());
+            for (size_t t = 0; t < nt; ++t) {
+                float u = 0.0f;
+                for (size_t i = 0; i < na; ++i) u += m.w[i] * m.au[i * nt + t];
+                const MorphTarget& tg = m.targets[t];
+                u = dsp::morphShape(u, tg.curve);
+                const float v = tg.log ? std::exp(std::log(tg.min) + u * (std::log(tg.max) - std::log(tg.min))) : tg.min + u * (tg.max - tg.min);
+                g.setParam(tg.addr, std::clamp(v, tg.min, tg.max));
+            }
+        }
+    }
     if (routes.empty()) return;
     std::fill(autoSet_.begin(), autoSet_.end(), 0);
     std::fill(lfoOff_.begin(), lfoOff_.end(), 0.0f);

@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "core/Cmd.h"
+#include "dsp/MorphMap.h"
 #include "core/Performance.h"
 #include "engine/Scheduler.h"
 
@@ -63,6 +64,18 @@ public:
     };
     struct MacroState { uint32_t route; uint16_t idx; float value; };      // a macro's own knob, applied every block
     struct PerfLane { uint32_t route; PerfSource source; double lo, hi; };   // a performance route (B2)
+    // A morph map (B5): the stick (x, y; smoothed here) blends the anchors' unit values into one value per target.
+    struct MorphTarget { ParamAddr addr{}; float min = 0, max = 1, curve = 1; bool log = false; };
+    struct MorphState {
+        uint16_t track = 0, idx = 0;
+        float x = 0.5f, y = 0.5f, sx = 0.5f, sy = 0.5f;
+        dsp::MorphMethod method = dsp::MorphMethod::Idw;
+        float power = 2, width = 0.35f;
+        std::vector<float> ax, ay;                 // anchor positions
+        std::vector<float> au;                     // anchor-major unit values: au[anchor * targets.size() + target]
+        std::vector<MorphTarget> targets;
+        std::vector<float> w;                      // scratch: the weights
+    };
     struct TrackMod {
         std::vector<EnvLane> env;
         std::vector<ArrLane> arrEnv;
@@ -77,14 +90,16 @@ public:
     std::vector<MacroSub> subs;
     std::vector<TrackMod> tracks;
     std::vector<AutoLane> masterAuto;
+    std::vector<MorphState> morphs;
     double sampleRate = 44100;
     void finalize();  // sizes the per-block scratch
 
-    bool empty() const noexcept { return routes.empty(); }
+    bool empty() const noexcept { return routes.empty() && morphs.empty(); }
 
     // Live edits of a macro knob / an LFO field (audio thread, from Graph::setParam).
     void setMacro(size_t track, uint16_t idx, float v) noexcept;
     void setLfo(size_t track, size_t idx, uint16_t field, float v) noexcept;
+    void setMorph(size_t track, size_t idx, uint16_t field, float v) noexcept;   // the stick, field kMorphX / kMorphY
 
     // ---- audio side (real-time safe) ----
     // Evaluate every source at `now` and push the combined values through Graph::setParam.
