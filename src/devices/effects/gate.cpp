@@ -107,7 +107,9 @@ public:
         dirty_ = true;
     }
 
-    void process(float* l, float* r, int n, const ProcessContext&, const ModInputs&) override {
+    bool keyable() const noexcept override { return true; }
+
+    void process(float* l, float* r, int n, const ProcessContext&, const ModInputs& mod) override {
         if (dirty_) recompute();
         const Params p = p_;
         const int mode = static_cast<int>(p.key);
@@ -121,14 +123,16 @@ public:
 
         for (int i = 0; i < n; ++i) {
             const float xl = l[i], xr = r[i];
+            // the detector's input: the sidechain key when there is one (a mono key on both sides), else the signal itself
+            const float cl = mod.keyL ? mod.keyL[i] : xl, cr = mod.keyL ? (mod.keyR ? mod.keyR[i] : mod.keyL[i]) : xr;
 
             float k0, k1 = 0.0f;
             switch (mode) {
-                case 0: k0 = xl; k1 = xr; break;
-                case 1: k0 = xl; break;
-                case 2: k0 = xr; break;
-                case 3: k0 = (xl + xr) * 0.5f; break;
-                default: k0 = (xl - xr) * 0.5f; break;
+                case 0: k0 = cl; k1 = cr; break;
+                case 1: k0 = cl; break;
+                case 2: k0 = cr; break;
+                case 3: k0 = (cl + cr) * 0.5f; break;
+                default: k0 = (cl - cr) * 0.5f; break;
             }
 
             k0 = lp_[0].proc(hp_[0].proc(k0));

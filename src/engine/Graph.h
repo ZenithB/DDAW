@@ -21,6 +21,7 @@
 #include "core/Device.h"
 #include "dsp/DelayLine.h"
 #include "dsp/Smoother.h"
+#include "dsp/Svf.h"
 #include "engine/AudioClips.h"
 #include "engine/Meters.h"
 #include "engine/Metronome.h"
@@ -63,6 +64,12 @@ struct FxSlot {
     std::unique_ptr<EffectDevice> dev;
     dsp::Smoother out;  // linear gain from the device's `out` (dB)
     AModBufs mod;       // audio-rate inputs (empty when nothing is routed to this device)
+    // Sidechain: the device's detector runs on another track's tap (after its effects, before pan, fader and mute: a muted track
+    // still keys), high-passed at keyHpfHz when that is above 0. keySrc < 0: no key.
+    int keySrc = -1;
+    float keyHpfHz = 0.0f;
+    dsp::Svf keyHp{dsp::SvfMode::Highpass};
+    std::vector<float> keyBuf;
 };
 
 struct TrackStrip {
@@ -162,6 +169,8 @@ public:
     // Audio-rate routes (B4). The route's target buffers must already be sized (AModBufs::init / ensure).
     // Sources must render before their targets: the builder orders the tracks.
     uint32_t addAudioRoute(const AudioRoute& r);
+    // Key a track's (dstTrack >= 0) or the master chain's (-1) effect `fx` from track `src`'s tap; `hpfHz` > 0 high-passes the key.
+    void addKey(int dstTrack, size_t fx, int src, float hpfHz);
     size_t audioRouteCount() const noexcept { return aroutes_.size(); }
     void finalize();  // computes delay compensation; call once after the last add*
 
@@ -246,6 +255,7 @@ private:
     std::vector<AudioRoute> aroutes_;
     double invSr_ = 1.0 / 44100.0;
     void renderRoutes(TrackStrip& t, int n) noexcept;
+    ModInputs inputsFor(FxSlot& f, int n) noexcept;   // the audio-rate buffers plus the filtered key
     dsp::Smoother masterGain_;
     SchedParams sched_;
     double launchQ_ = 1, loopStart_ = 0, loopEnd_ = 4 * 384;

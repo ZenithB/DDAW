@@ -436,6 +436,23 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
         }
     }
 
+    // ---- sidechain keys: a dynamics device with a source track detects on that track's audio, so the source renders first ----
+    for (size_t ti = 0; ti < nTracks; ++ti) {
+        for (const auto& bf : builtFx[ti]) {
+            const DeviceSpec& spec = *bf.spec;
+            if (spec.type == "duck" || spec.srcTrack.empty()) continue;   // the ducker's source is a note trigger, handled above
+            const std::string where = "track " + p.tracks[ti].id + " " + spec.type + " sidechain";
+            const size_t fxIdx = size_t(bf.slot) - size_t(kSlotFx0);
+            if (!g.track(int(ti)).fx[fxIdx].dev->keyable()) { issues.insert(where + ": this device has no sidechain input"); continue; }
+            const int src = find(spec.srcTrack);
+            if (src < 0) { issues.insert(where + ": source track '" + spec.srcTrack + "' not found"); continue; }
+            if (isBus(src)) { issues.insert(where + ": a bus cannot be a sidechain source (it renders after the tracks)"); continue; }
+            if (src == int(ti) || (!isBus(int(ti)) && reaches(int(ti), src))) { issues.insert(where + ": sidechain loop with track '" + spec.srcTrack + "'"); continue; }
+            g.addKey(int(ti), fxIdx, src, spec.keyHpf ? static_cast<float>(*spec.keyHpf) : 0.0f);
+            if (!isBus(int(ti))) aEdges.push_back({src, int(ti)});
+        }
+    }
+
     // ---- render order: non-bus tracks in document order (sources of audio-rate routes first), then buses topologically ----
     std::vector<int> order;
     {
@@ -483,6 +500,14 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
         FxSlot& slot = g.addMasterFx();
         const uint8_t slotIdx = static_cast<uint8_t>(kSlotFx0 + g.masterFxCount() - 1);
         applyParams(*dev, f, "master fx " + f.type, issues, res, "master|" + fxIdOf(f) + "|", kTargetMaster, slotIdx);
+        if (!f.srcTrack.empty() && f.type != "duck") {   // the master chain renders after every track: any (non-bus) track can key it
+            const std::string where = "master " + f.type + " sidechain";
+            const int src = find(f.srcTrack);
+            if (!dev->keyable()) issues.insert(where + ": this device has no sidechain input");
+            else if (src < 0) issues.insert(where + ": source track '" + f.srcTrack + "' not found");
+            else if (isBus(src)) issues.insert(where + ": a bus cannot be a sidechain source");
+            else g.addKey(-1, size_t(g.masterFxCount()) - 1, src, f.keyHpf ? static_cast<float>(*f.keyHpf) : 0.0f);
+        }
         dev->reset();
         if (f.type == "duck") {
             dev->setSidechain(!f.srcTrack.empty());

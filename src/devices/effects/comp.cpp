@@ -25,7 +25,8 @@ public:
             default: break;
         }
     }
-    void process(float* l, float* r, int n, const ProcessContext&, const ModInputs&) override { k_.process(l, r, n); }
+    void process(float* l, float* r, int n, const ProcessContext&, const ModInputs& mod) override { k_.process(l, r, n, mod.keyL, mod.keyR); }
+    bool keyable() const noexcept override { return true; }
     void reset() override { k_.reset(); }
     int latencySamples() const override { return k_.latencySamples(); }  // the node's 6 ms lookahead
     float gainReductionDb() const override { return k_.grDb(); }

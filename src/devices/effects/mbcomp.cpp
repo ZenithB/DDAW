@@ -100,7 +100,9 @@ public:
         }
     }
 
-    void process(float* l, float* r, int n, const ProcessContext&, const ModInputs&) override {
+    bool keyable() const noexcept override { return true; }
+
+    void process(float* l, float* r, int n, const ProcessContext&, const ModInputs& mod) override {
         if (n <= 0) return;
         const float curLo = xlo_.current(), curHi = xhi_.current();
         if (std::abs(curLo - appliedXlo_) > 0.01f || std::abs(curHi - appliedXhi_) > 0.01f) recomputeFilters(curLo, curHi);
@@ -113,9 +115,15 @@ public:
             float bl[3], br[3];
             split(bq_[0], l[i], bl);
             split(bq_[1], r[i], br);
+            // the detector's bands: the key's own, split by a second filter bank, when there is a sidechain
+            float kl[3], kr[3];
+            if (mod.keyL) {
+                split(keyBq_[0], mod.keyL[i], kl);
+                split(keyBq_[1], mod.keyR ? mod.keyR[i] : mod.keyL[i], kr);
+            }
             float sl = 0.0f, sr = 0.0f;
             for (size_t b = 0; b < 3; ++b) {
-                const float rect = std::max(std::abs(bl[b]), std::abs(br[b]));
+                const float rect = mod.keyL ? std::max(std::abs(kl[b]), std::abs(kr[b])) : std::max(std::abs(bl[b]), std::abs(br[b]));
                 const float c = rect > env_[b] ? attC_ : relC_;
                 env_[b] = rect + (env_[b] - rect) * c;
                 const float lvlDb = 20.0f * std::log10(env_[b] + 1e-9f);
@@ -152,7 +160,7 @@ public:
         xlo_.snap(xlo_.target());
         xhi_.snap(xhi_.target());
         for (size_t b = 0; b < 3; ++b) { thresh_[b].snap(thresh_[b].target()); ratio_[b].snap(ratio_[b].target()); makeup_[b].snap(makeup_[b].target()); }
-        for (auto& ch : bq_) for (auto& q : ch) q.resetState();
+        for (auto* bank : {&bq_, &keyBq_}) for (auto& ch : *bank) for (auto& q : ch) q.resetState();
         recomputeFilters(xlo_.current(), xhi_.current());
         env_ = {0.0f, 0.0f, 0.0f};
         grMax_ = {0.0f, 0.0f, 0.0f};
@@ -170,12 +178,13 @@ private:
         const float lo = std::min(xlo, xhi - 20.0f);  // keep crossovers ordered
         const float hi = std::max(xhi, xlo + 20.0f);
         const auto lp = lpCoeffs(lo, sr_), hp = hpCoeffs(lo, sr_), lp2 = lpCoeffs(hi, sr_), hp2 = hpCoeffs(hi, sr_);
-        for (auto& ch : bq_) {
-            ch[0].c = lp; ch[1].c = lp;      // xlo low
-            ch[2].c = hp; ch[3].c = hp;      // xlo high
-            ch[4].c = lp2; ch[5].c = lp2;    // xhi mid
-            ch[6].c = hp2; ch[7].c = hp2;    // xhi high
-        }
+        for (auto* bank : {&bq_, &keyBq_})
+            for (auto& ch : *bank) {
+                ch[0].c = lp; ch[1].c = lp;      // xlo low
+                ch[2].c = hp; ch[3].c = hp;      // xlo high
+                ch[4].c = lp2; ch[5].c = lp2;    // xhi mid
+                ch[6].c = hp2; ch[7].c = hp2;    // xhi high
+            }
         appliedXlo_ = xlo;
         appliedXhi_ = xhi;
     }
@@ -192,7 +201,7 @@ private:
     Smoother xlo_, xhi_;
     float attackSec_ = 0.02f, releaseSec_ = 0.18f, attC_ = 0.0f, relC_ = 0.0f;
     std::array<Smoother, 3> thresh_, ratio_, makeup_;
-    std::array<std::array<Biquad, 8>, 2> bq_;
+    std::array<std::array<Biquad, 8>, 2> bq_, keyBq_;   // keyBq_: the same crossovers for a sidechain key
     std::array<float, 3> env_{}, grMax_{}, grReport_{};
     float appliedXlo_ = 0.0f, appliedXhi_ = 0.0f;
     int rep_ = 0, repEvery_ = 1323;

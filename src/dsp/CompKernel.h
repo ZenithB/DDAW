@@ -35,8 +35,9 @@ public:
     void setAttack(float s) noexcept { attackSec_ = std::clamp(s, 0.001f, 0.3f); updateTimeCoeffs(); }
     void setRelease(float s) noexcept { releaseSec_ = std::clamp(s, 0.02f, 1.0f); updateTimeCoeffs(); }
 
-    // In place, planar stereo. Real-time safe.
-    void process(float* l, float* r, int n) noexcept;
+    // In place, planar stereo. Real-time safe. With keyL (and optionally keyR, else keyL again) the detector listens to that signal
+    // instead of the input - a sidechain: the gain it finds is applied to l/r.
+    void process(float* l, float* r, int n, const float* keyL = nullptr, const float* keyR = nullptr) noexcept;
 
     float grDb() const noexcept { return std::min(meteringGain_, 0.0f); }  // the node's `reduction`
     int latencySamples() const noexcept { return preDelayFrames_; }

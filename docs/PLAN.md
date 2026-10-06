@@ -393,3 +393,7 @@ Done: `harmnoise` (hand-controlled harmonic + noise), `subtractive` (two PolyBLE
 ### L1 Plugin hosting (2026-10-06)
 
 Done: hosted VST3 and AudioUnit instruments and effects as `plugin` devices (a shared instance per device across graph rebuilds, state saved in the project, parameters exposed to automation, LFOs, macros and morph maps), the browser and device-chain UI, a scan with a crash guard and a cache, a hidden full-machine scan test, and a soak mode that adds and removes real AudioUnits while editing. Verified against Apple's AUDelay and DLSMusicDevice. Not done, and why it matters: plugins run in the app's process, so a plugin that crashes while playing takes the app down (the answer is a sandboxed host process, a milestone of its own); no sidechain or per-note MPE; nothing tested yet with third-party VST3s.
+
+### Sidechain (2026-10-06)
+
+Done: a source-track sidechain, optional on every dynamics device (`comp`, `opto`, `mbcomp`, `gate`; per device, in the device chain), with a key filter, on track and master chains; ARCH 24. Not done: bus sources, stereo keys, hosted plugins' sidechain buses.

@@ -98,7 +98,9 @@ public:
         }
     }
 
-    void process(float* l, float* r, int n, const ProcessContext&, const ModInputs&) override {
+    bool keyable() const noexcept override { return true; }
+
+    void process(float* l, float* r, int n, const ProcessContext&, const ModInputs& mod) override {
         const size_t len = delayL_.size();
         for (int i = 0; i < n; ++i) {
             const float thresh = thresh_.next();
@@ -108,7 +110,7 @@ public:
 
             // Detector: linear attenuation of the stereo peak through the static curve, instant
             // attack, sat-release.
-            const float level = std::max(std::abs(l[i]), std::abs(r[i]));
+            const float level = mod.keyL ? std::max(std::abs(mod.keyL[i]), std::abs((mod.keyR ? mod.keyR : mod.keyL)[i])) : std::max(std::abs(l[i]), std::abs(r[i]));
             float attenuation, attenuationDb;
             if (level <= 1e-4f) {
                 attenuation = 1.0f; attenuationDb = 2.0f;

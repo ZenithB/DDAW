@@ -30,6 +30,7 @@ json deviceJson(const DeviceSpec& d, bool isInst = false) {
     if (d.outDb) j["out"] = *d.outDb;
     if (!d.srcTrack.empty()) j["srcTrack"] = d.srcTrack;
     if (d.srcPitch) j["srcPitch"] = *d.srcPitch;
+    if (d.keyHpf) j["keyHpf"] = *d.keyHpf;
     if (!d.sampleId.empty()) j["sampleId"] = d.sampleId;
     if (!d.sampleName.empty()) j["sampleName"] = d.sampleName;
     if (!d.padSamples.empty()) j["padSamples"] = strMapJson(d.padSamples);

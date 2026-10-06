@@ -40,6 +40,10 @@ struct ModInputs {
     // Indexed by A-rate ordinal (position among ParamSpecs with audioRate set,
     // in ParamSpec order). nullptr when unmodulated this block.
     std::span<const float* const> audioRate;
+    // Sidechain (dynamics devices): another track's audio for the detector, n frames, mono sources on both pointers. Null when the
+    // device has no sidechain source this block: it detects on its own input as always. The processed signal is never the key.
+    const float* keyL = nullptr;
+    const float* keyR = nullptr;
 };
 
 struct PerformanceFrame {
@@ -64,6 +68,8 @@ public:
     virtual void  trigger() noexcept {}
     // The project routed a source track to this device (duck's `srcTrack`): switch to sidechain mode.
     virtual void  setSidechain(bool) noexcept {}
+    // True for dynamics processors that can run their detector on a key signal (ModInputs::keyL/keyR).
+    virtual bool  keyable() const noexcept { return false; }
     // Control path (builder thread, before prepare): the device's project identity - its uid and, for a hosted plugin, which
     // plugin it is (DeviceSpec::plugin). Devices that need neither ignore it.
     virtual void  bind(uint64_t /*deviceUid*/, std::string_view /*pluginId*/) {}

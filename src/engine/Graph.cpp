@@ -105,6 +105,30 @@ uint32_t Graph::addAudioRoute(const AudioRoute& r) {
     return idx;
 }
 
+void Graph::addKey(int dstTrack, size_t fx, int src, float hpfHz) {
+    FxSlot& f = dstTrack < 0 ? masterFx_[fx] : tracks_[size_t(dstTrack)].fx[fx];
+    auto& s = tracks_[size_t(src)];
+    s.tapped = true;
+    if (s.tap.empty()) s.tap.assign(size_t(kMaxBlock), 0.0f);
+    f.keySrc = src;
+    f.keyHpfHz = std::max(hpfHz, 0.0f);
+    f.keyBuf.assign(size_t(kMaxBlock), 0.0f);
+    f.keyHp.prepare(float(sr_));
+    if (f.keyHpfHz > 0.0f) f.keyHp.setCutoffQ(f.keyHpfHz, 0.7071f);
+}
+
+ModInputs Graph::inputsFor(FxSlot& f, int n) noexcept {
+    ModInputs in = f.mod.inputs();
+    if (f.keySrc < 0) return in;
+    const float* s = tracks_[size_t(f.keySrc)].tap.data();
+    if (f.keyHpfHz > 0.0f) {
+        for (int i = 0; i < n; ++i) f.keyBuf[size_t(i)] = f.keyHp.processSample(s[i]);
+        s = f.keyBuf.data();
+    }
+    in.keyL = in.keyR = s;
+    return in;
+}
+
 // Fill this track's devices' audio-rate buffers for the chunk: every route adds source * depth * halfRange.
 void Graph::renderRoutes(TrackStrip& t, int n) noexcept {
     const auto modOf = [&](const AudioRoute& r) -> AModBufs& { return r.dstFx < 0 ? t.instMod : t.fx[size_t(r.dstFx)].mod; };
@@ -285,7 +309,7 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
         const auto pf0 = std::chrono::steady_clock::now();
 #endif
         for (auto& f : t.fx) {
-            f.dev->process(tl, tr, n, ctx, f.mod.inputs());
+            f.dev->process(tl, tr, n, ctx, inputsFor(f, n));
             applyGain(tl, tr, n, advance(f.out, n));
         }
 #ifdef DDAW_GRAPH_PROFILE
@@ -371,7 +395,7 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
         mixL_[size_t(k)] *= g; mixR_[size_t(k)] *= g;
     }
     for (auto& f : masterFx_) {
-        f.dev->process(mixL_.data(), mixR_.data(), n, ctx, {});
+        f.dev->process(mixL_.data(), mixR_.data(), n, ctx, inputsFor(f, n));
         applyGain(mixL_.data(), mixR_.data(), n, advance(f.out, n));
     }
     std::memcpy(outL, mixL_.data(), size_t(n) * sizeof(float));

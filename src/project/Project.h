@@ -59,6 +59,7 @@ struct DeviceSpec {
     std::optional<double> outDb;        // device output gain (dB)
     std::string srcTrack;               // duck: the sidechain source track id
     std::optional<double> srcPitch;     // duck: restrict the trigger to this pitch
+    std::optional<double> keyHpf;       // dynamics sidechain: high-pass the key (Hz; absent or 0: off)
     // Instruments only: the sample bank ids (sampler, ksampler, granular; drum pad overrides by slot).
     std::string sampleId, sampleName;
     std::map<std::string, std::string> padSamples, padNames;

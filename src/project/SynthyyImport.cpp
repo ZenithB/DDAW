@@ -55,6 +55,7 @@ DeviceSpec device(const json& j) {
     d.outDb = getOptNum(j, "out");
     d.srcTrack = get<std::string>(j, "srcTrack", "");
     d.srcPitch = getOptNum(j, "srcPitch");
+    d.keyHpf = getOptNum(j, "keyHpf");
     d.sampleId = get<std::string>(j, "sampleId", "");
     d.sampleName = get<std::string>(j, "sampleName", "");
     auto strMap = [&](const char* key) {

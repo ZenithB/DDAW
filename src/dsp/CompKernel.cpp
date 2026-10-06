@@ -160,7 +160,7 @@ void CompKernel::updateDivision() noexcept {
     }
 }
 
-void CompKernel::process(float* l, float* r, int n) noexcept {
+void CompKernel::process(float* l, float* r, int n, const float* keyL, const float* keyR) noexcept {
     for (int i = 0; i < n; ++i) {
         const float t = thresh_.next();
         const float ratio = ratio_.next();
@@ -175,7 +175,7 @@ void CompKernel::process(float* l, float* r, int n) noexcept {
         // Write into the lookahead line; detect on the UNDELAYED input (stereo-linked channel max).
         delayL_[writeIdx_] = l[i];
         delayR_[writeIdx_] = r[i];
-        const float absInput = std::max(std::abs(l[i]), std::abs(r[i]));
+        const float absInput = keyL ? std::max(std::abs(keyL[i]), std::abs((keyR ? keyR : keyL)[i])) : std::max(std::abs(l[i]), std::abs(r[i]));
 
         // Shaped power through the static curve gives the instantaneous attenuation.
         const float shaped = saturate(absInput);

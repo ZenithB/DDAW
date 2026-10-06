@@ -249,7 +249,7 @@ int main(int argc, char** argv) {
         const auto& p = model.project();
         const size_t nT = p.tracks.size();
         bool ok = true;
-        switch (rng() % (hostPlugins ? 29u : 27u)) {
+        switch (rng() % (hostPlugins ? 30u : 28u)) {
             case 0: if (!p.scenes.empty()) model.launchScene(p.scenes[pick(p.scenes.size())]); break;
             case 1: model.stopAllClips(); break;
             case 2: arrMode = !arrMode; model.play(arrMode, 0.0); break;
@@ -335,8 +335,23 @@ int main(int argc, char** argv) {
                 break;
             }
             case 26: model.allNotesOff(); model.bend(0.0f); break;
+            case 27: if (nT > 1) {   // sidechain: a dynamics device keyed by another track (or back to its own signal), with a key filter
+                const auto& t = p.tracks[pick(nT)];
+                if (t.kind == project::TrackKind::Bus) break;
+                static const char* kDyn[] = {"comp", "opto", "mbcomp", "gate"};
+                const project::DeviceSpec* has = nullptr;
+                for (auto& f : t.fx) for (const char* d : kDyn) if (f.type == d) has = &f;
+                if (!has) { if (t.fx.size() < 5) ok = model.apply(app::edit::addDevice(p, t.uid, "fx", kDyn[pick(4)])); break; }
+                const auto& src = p.tracks[pick(nT)];
+                switch (rng() % 4) {
+                    case 0: ok = model.apply({"device.set", {{"uid", has->uid}, {"field", "srcTrack"}, {"value", src.id == t.id ? std::string() : src.id}}}); break;
+                    case 1: ok = model.apply({"device.set", {{"uid", has->uid}, {"field", "srcTrack"}, {"value", std::string()}}}); break;
+                    case 2: ok = model.apply({"device.set", {{"uid", has->uid}, {"field", "keyHpf"}, {"value", 50.0 + 1500.0 * uni()}}}); break;
+                    default: ok = model.apply(app::edit::removeDevice(has->uid)); break;
+                }
+            } break;
 #ifdef DDAW_SOAK_PLUGINS
-            case 27: if (nT) {   // a hosted effect on a random track: add one, or remove the one that is there
+            case 28: if (nT) {   // a hosted effect on a random track: add one, or remove the one that is there
                 const auto& t = p.tracks[pick(nT)];
                 if (t.kind == project::TrackKind::Bus) break;
                 const project::DeviceSpec* has = nullptr;
@@ -345,7 +360,7 @@ int main(int argc, char** argv) {
                 else if (t.fx.size() < 5) ok = model.apply(app::edit::addPluginEffect(p, t.uid, "fx", delayId, "AUDelay"));
                 if (ok) ++pluginEdits;
             } break;
-            case 28: if (nT) {   // a hosted instrument on a random synth track, or back to the poly synth
+            case 29: if (nT) {   // a hosted instrument on a random synth track, or back to the poly synth
                 const auto& t = p.tracks[pick(nT)];
                 if (t.kind != project::TrackKind::Synth) break;
                 ok = model.apply(t.inst.type == "plugin" ? app::edit::setInstrument(p, t.uid, "poly") : app::edit::setPluginInstrument(t.uid, dlsId, "DLSMusicDevice"));

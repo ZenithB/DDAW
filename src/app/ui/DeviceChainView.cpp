@@ -18,6 +18,7 @@ public:
           power_("", col::play), left_("<"), right_(">"), close_("x") {
         info_ = app::deviceInfoFor(chain, d);
         plugin_ = d.type == "plugin";
+        keyable_ = d.type == "comp" || d.type == "opto" || d.type == "mbcomp" || d.type == "gate";   // dynamics: they can detect on another track
         label_ = info_ ? info_->label : (plugin_ ? (d.pluginName.empty() ? juce::String("Plugin") : juce::String(d.pluginName)) : d.type);
         const int rows = std::max(1, (availH - kPanelHeader - kPad - (special() ? 26 : 0)) / kKnobH);
         const size_t n = info_ ? (plugin_ ? std::min(info_->params.size(), kMaxPluginKnobs) : info_->params.size()) : 0;
@@ -48,8 +49,8 @@ public:
             }
         }
         if (special()) {
-            extra_ = std::make_unique<Chip>(plugin_ ? "Open editor" : type_ == "duck" ? "Source: ..." : type_ == "drum" ? "Pad samples..." : "Load sample...");
-            extra_->onClick = [this] { plugin_ ? openEditor() : type_ == "duck" ? pickSource() : type_ == "drum" ? pickPadSamples() : pickSample(); };
+            extra_ = std::make_unique<Chip>(plugin_ ? "Open editor" : keyable_ ? "Sidechain: off" : type_ == "duck" ? "Source: ..." : type_ == "drum" ? "Pad samples..." : "Load sample...");
+            extra_->onClick = [this] { plugin_ ? openEditor() : keyable_ ? pickKey() : type_ == "duck" ? pickSource() : type_ == "drum" ? pickPadSamples() : pickSample(); };
             addAndMakeVisible(*extra_);
         }
         sync(d);
@@ -87,6 +88,10 @@ public:
                 extra_->setText(d.padSamples.empty() ? juce::String("Pad samples...") : juce::String(int(d.padSamples.size())) + " pad sample(s)");
             } else if (plugin_) {
                 extra_->setText("Open editor");
+            } else if (keyable_) {
+                const auto* t = app::edit::findTrackById(model_.project(), d.srcTrack);
+                extra_->setText(d.srcTrack.empty() ? juce::String("Sidechain: off") : juce::String("Sidechain: ") + (t ? juce::String(t->name) : juce::String(d.srcTrack) + " (gone)"));
+                extra_->setOn(!d.srcTrack.empty());
             } else extra_->setText(d.sampleId.empty() ? juce::String("Load sample...") : juce::String(d.sampleName.empty() ? d.sampleId : d.sampleName));
         }
         selected_ = model_.selection().device == uid_;
@@ -122,7 +127,7 @@ public:
     void mouseDown(const juce::MouseEvent&) override { model_.selectDevice(uid_); }
 
 private:
-    bool special() const { return plugin_ || type_ == "duck" || type_ == "drum" || type_ == "sampler" || type_ == "ksampler" || type_ == "granular"; }
+    bool special() const { return plugin_ || keyable_ || type_ == "duck" || type_ == "drum" || type_ == "sampler" || type_ == "ksampler" || type_ == "granular"; }
     juce::Colour accent() const { return chain_ == app::Chain::Instrument ? col::accent : chain_ == app::Chain::MidiFx ? col::meterMid : juce::Colour(0xff5aa9e6); }
     void move(int delta) {
         const auto& p = model_.project();
@@ -138,6 +143,35 @@ private:
         document::Command ins{"device.insert", {{"chain", master_ ? "master" : chain_ == app::Chain::MidiFx ? "midifx" : "fx"}, {"index", to}, {"device", project::deviceToJson(*d)}}};
         if (tr) ins.args["track"] = tr->uid;
         model_.applyGroup("move device", {app::edit::removeDevice(uid_), ins});
+    }
+    // The sidechain: which track this dynamics device detects on (off: its own signal) and a high-pass on that key.
+    void pickKey() {
+        const auto* d = model_.document().findDevice(uid_);
+        if (!d) return;
+        const auto& p = model_.project();
+        project::Uid own = 0;
+        for (auto& t : p.tracks) for (auto& x : t.fx) if (x.uid == uid_) own = t.uid;
+        juce::PopupMenu m;
+        m.addItem(1, "Off (detect on this signal)", true, d->srcTrack.empty());
+        m.addSeparator();
+        auto ids = std::make_shared<std::vector<std::string>>();
+        int id = 100;
+        for (auto& t : p.tracks) {
+            if (t.kind == project::TrackKind::Bus || t.uid == own) continue;     // a bus renders after the tracks; a track cannot key itself
+            m.addItem(id++, juce::String(t.name), true, t.id == d->srcTrack);
+            ids->push_back(t.id);
+        }
+        m.addSeparator();
+        static const double kHz[] = {0, 80, 120, 200, 300, 500, 1000};
+        juce::PopupMenu f;
+        const double cur = d->keyHpf.value_or(0.0);
+        for (size_t i = 0; i < std::size(kHz); ++i) f.addItem(int(500 + i), kHz[i] == 0 ? juce::String("Off") : juce::String(int(kHz[i])) + " Hz", true, kHz[i] == cur);
+        m.addSubMenu("Key filter (high-pass)", f);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(extra_.get()), [this, ids](int r) {
+            if (r == 1) model_.apply({"device.set", {{"uid", uid_}, {"field", "srcTrack"}, {"value", ""}}});
+            else if (r >= 100 && size_t(r - 100) < ids->size()) model_.apply({"device.set", {{"uid", uid_}, {"field", "srcTrack"}, {"value", (*ids)[size_t(r - 100)]}}});
+            else if (r >= 500 && size_t(r - 500) < std::size(kHz)) model_.apply({"device.set", {{"uid", uid_}, {"field", "keyHpf"}, {"value", kHz[size_t(r - 500)] == 0 ? nlohmann::json(nullptr) : nlohmann::json(kHz[size_t(r - 500)])}}});
+        });
     }
     void openEditor() {
         if (auto* pp = model_.pluginProvider()) pp->showEditor(uid_, [this] { model_.flushPluginStates(); });
@@ -230,7 +264,7 @@ private:
     bool master_, on_ = true, selected_ = false;
     size_t slot_, slots_;
     std::string type_;
-    bool plugin_ = false;
+    bool plugin_ = false, keyable_ = false;
     const app::DeviceInfo* info_ = nullptr;
     juce::String label_;
     int width_ = 150;

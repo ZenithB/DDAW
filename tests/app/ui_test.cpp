@@ -1394,3 +1394,48 @@ TEST_CASE("MPE setup over MIDI: the configuration message sets the zones, the se
     r.m->tick();
     CHECK(refreshes == before + 1);                   // once
 }
+
+TEST_CASE("device chain: a dynamics device shows its sidechain source and follows changes to it", "[ui][sidechain]") {
+    Rig r; r.demo();
+    auto& m = *r.m;
+    // the Chords track gets a compressor
+    const auto chords = m.project().tracks[2].uid;
+    REQUIRE(m.apply(edit::addDevice(m.project(), chords, "fx", "comp")));
+    const auto devUid = m.project().tracks[2].fx.back().uid;
+    m.selectTrack(chords);
+    ui::DeviceChainView v(m);
+    v.setSize(1300, 300);
+    v.refresh(app::ModelEvent::Selection);
+    auto sidechainChip = [&]() -> ui::Chip* {
+        std::vector<ui::Chip*> chips;
+        findAll(v, chips);
+        for (auto* c : chips) if (c->text().startsWith("Sidechain")) return c;
+        return nullptr;
+    };
+    REQUIRE(sidechainChip());
+    CHECK(sidechainChip()->text() == "Sidechain: off");
+    CHECK_FALSE(sidechainChip()->isOn());
+    // keyed by the drums
+    REQUIRE(m.apply({"device.set", {{"uid", devUid}, {"field", "srcTrack"}, {"value", m.project().tracks[0].id}}}));
+    v.refresh(app::ModelEvent::Document);
+    REQUIRE(sidechainChip());
+    CHECK(sidechainChip()->text() == juce::String("Sidechain: ") + juce::String(m.project().tracks[0].name));
+    CHECK(sidechainChip()->isOn());
+    // the key filter is part of the device and of undo
+    REQUIRE(m.apply({"device.set", {{"uid", devUid}, {"field", "keyHpf"}, {"value", 200.0}}}));
+    REQUIRE(m.project().tracks[2].fx.back().keyHpf.has_value());
+    CHECK(*m.project().tracks[2].fx.back().keyHpf == Approx(200.0));
+    m.undo();
+    CHECK_FALSE(m.project().tracks[2].fx.back().keyHpf.has_value());
+    m.undo();
+    v.refresh(app::ModelEvent::Document);
+    CHECK(sidechainChip()->text() == "Sidechain: off");
+    // other effects have no such chip
+    REQUIRE(m.apply(edit::addDevice(m.project(), chords, "fx", "reverb")));
+    v.refresh(app::ModelEvent::Selection);
+    std::vector<ui::Chip*> chips;
+    findAll(v, chips);
+    int n = 0;
+    for (auto* c : chips) if (c->text().startsWith("Sidechain")) ++n;
+    CHECK(n == 1);                                                    // the compressor's only
+}

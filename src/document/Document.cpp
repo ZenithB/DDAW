@@ -296,6 +296,11 @@ Document::Exec Document::execute(const Command& c) {
         }
         else if (f == "id") { if (!v.is_string()) bad("device.id needs a string"); old = d.id; d.id = v.get<std::string>(); ex.info = structuralChange(); }
         else if (f == "srcTrack") { if (!v.is_string()) bad("device.srcTrack needs a string"); old = d.srcTrack; d.srcTrack = v.get<std::string>(); ex.info = structuralChange(); }
+        else if (f == "keyHpf") {
+            old = d.keyHpf ? json(*d.keyHpf) : json(nullptr);
+            if (v.is_null()) d.keyHpf.reset(); else if (v.is_number()) d.keyHpf = v.get<double>(); else bad("device.keyHpf needs a number or null");
+            ex.info = structuralChange();
+        }
         else if (f == "srcPitch") {
             old = d.srcPitch ? json(*d.srcPitch) : json(nullptr);
             if (v.is_null()) d.srcPitch.reset(); else if (v.is_number()) d.srcPitch = v.get<double>(); else bad("device.srcPitch needs a number or null");
