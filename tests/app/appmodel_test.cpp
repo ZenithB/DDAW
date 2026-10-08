@@ -205,7 +205,7 @@ TEST_CASE("timeline: coordinate maps, zoom anchoring and snap grids", "[appmodel
 
 #include "app/model/Demo.h"
 
-TEST_CASE("model: the demo song plays through a live engine and edits land while it plays", "[appmodel][live][threads]") {
+TEST_CASE("model: the demo song plays through a live engine and edits land while it plays", "[appmodel][live][threads][timing]") {
     engine::Engine eng;
     eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
@@ -843,4 +843,35 @@ TEST_CASE("plugins (model): a plugin's state is saved with the project, and load
     m.newProject();
     CHECK(host.liveIds.empty());
     fs::remove_all(dir);
+}
+
+TEST_CASE("model: a dynamics device's gain reduction is read from the engine by its place in the chain (bypassed devices take no slot)", "[appmodel][meters]") {
+    Rig r;
+    auto& m = *r.m;
+    auto& bank = const_cast<engine::MeterBank&>(r.eng.meters());   // the audio thread writes these; the test plays its part
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
+    const auto t1 = m.project().tracks[1].uid;
+    m.apply(edit::addDevice(m.project(), t1, "fx", "reverb"));
+    m.apply(edit::addDevice(m.project(), t1, "fx", "comp"));
+    m.apply(edit::addDevice(m.project(), t1, "fx", "mbcomp"));
+    const auto& fx = m.project().tracks[1].fx;
+    const auto comp = fx[1].uid, mb = fx[2].uid;
+    bank.setFxGr(1, 1, 0, -9.0f);                       // track 1, second effect
+    bank.setFxGr(1, 2, 0, -3.0f); bank.setFxGr(1, 2, 1, -6.0f); bank.setFxGr(1, 2, 2, -12.0f);
+    CHECK(m.reductionDb(comp) == -9.0f);
+    CHECK(m.reductionDb(mb, 0) == -3.0f);
+    CHECK(m.reductionDb(mb, 1) == -6.0f);
+    CHECK(m.reductionDb(mb, 2) == -12.0f);
+    CHECK(m.reductionDb(99999) == 0.0f);                           // no such device
+    // bypassing the reverb moves everything up a slot in the graph, and the lookup follows
+    m.apply({"device.set", {{"uid", fx[0].uid}, {"field", "on"}, {"value", false}}});
+    bank.clearFx();
+    bank.setFxGr(1, 0, 0, -4.0f);
+    CHECK(m.reductionDb(comp) == -4.0f);
+    // the master chain
+    m.apply(edit::addDevice(m.project(), 0, "master", "comp"));
+    const auto mc = m.project().masterFx[0].uid;
+    bank.setFxGr(-1, 0, 0, -7.0f);
+    CHECK(m.reductionDb(mc) == -7.0f);
 }

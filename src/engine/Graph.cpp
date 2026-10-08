@@ -53,6 +53,7 @@ Graph::Graph(uint32_t epoch, double sr) : epoch_(epoch), sr_(sr), invSr_(1.0 / s
     masterGain_.snap(1.0f);
     mixL_.assign(kMaxBlock, 0.0f); mixR_.assign(kMaxBlock, 0.0f);
     tmpL_.assign(kMaxBlock, 0.0f); tmpR_.assign(kMaxBlock, 0.0f);
+    pdcL_.assign(kMaxBlock, 0.0f); pdcR_.assign(kMaxBlock, 0.0f); sdL_.assign(kMaxBlock, 0.0f); sdR_.assign(kMaxBlock, 0.0f);
 }
 
 TrackStrip& Graph::addTrack() {
@@ -104,6 +105,13 @@ uint32_t Graph::addAudioRoute(const AudioRoute& r) {
     }
     return idx;
 }
+
+namespace {
+void publishReduction(MeterBank& m, int track, int fx, const EffectDevice& d) noexcept {
+    const int bands = std::min(d.reductionBands(), kMaxBands);
+    for (int b = 0; b < bands; ++b) m.setFxGr(track, fx, b, d.reductionDb(b));
+}
+}  // namespace
 
 void Graph::addKey(int dstTrack, size_t fx, int src, float hpfHz) {
     FxSlot& f = dstTrack < 0 ? masterFx_[fx] : tracks_[size_t(dstTrack)].fx[fx];
@@ -168,29 +176,72 @@ void Graph::finalize() {
     }
     // Buses (and any track routed into one) accumulate input in a buffer.
     for (auto& t : tracks_) if (t.isBus) { t.bufL.assign(kMaxBlock, 0.0f); t.bufR.assign(kMaxBlock, 0.0f); }
-    // Path latency: a track's own chain plus the bus chain it feeds through its output routing.
-    std::vector<int> chain(tracks_.size(), 0);
-    for (size_t pass = 0; pass < tracks_.size() + 1; ++pass)  // forward bus edges only, so this converges
-        for (size_t i = 0; i < tracks_.size(); ++i) {
-            const auto& t = tracks_[i];
-            const int down = t.outKind == TrackStrip::Out::Bus ? chain[static_cast<size_t>(t.outTarget)] : 0;
-            chain[i] = t.latencySamples() + down;
+    // Delay compensation. Every route into a summing point (a bus input, the master) must arrive with the same delay, so the
+    // paths of one source that reach it by different ways (its output and its sends) stay aligned, and so do different sources.
+    // Walk the strips in render order (sources before their targets): a strip's output is `inLat` (the latest of what feeds it)
+    // plus its own chain; each route then gets a delay of (the destination's inLat - this output). A feedback route (a bus cycle's
+    // delayed edge) carries its own delay and is left out. Sends count when their level is above 0 as the graph is built (a send
+    // raised from 0 later reaches a bus aligned for the others, not for itself, until the next build).
+    const size_t nTracks = tracks_.size();
+    std::vector<int> inLat(nTracks, 0), outLat(nTracks, 0);
+    std::vector<int> retIn(returns_.size(), 0);
+    int masterIn = 0;
+    struct Edge { int src; enum Kind { Out, A, B, Send, Ret } kind; size_t idx; int dstTrack; int dstRet; };   // dstTrack: -1 master
+    std::vector<Edge> edges;
+    for (size_t i = 0; i < nTracks; ++i) {
+        const auto& t = tracks_[i];
+        if (t.outKind == TrackStrip::Out::Master) edges.push_back({int(i), Edge::Out, 0, -1, -1});
+        else if (t.outKind == TrackStrip::Out::Bus) edges.push_back({int(i), Edge::Out, 0, t.outTarget, -1});
+        if (!t.isBus) {
+            const auto sendDst = [&](int bus, size_t retIdx, Edge::Kind k) {
+                if (bus >= 0) edges.push_back({int(i), k, 0, bus, -1});
+                else if (retIdx < returns_.size()) edges.push_back({int(i), k, 0, -1, int(retIdx)});
+            };
+            if (t.sendA.target() > 0.0f) sendDst(sendABus_, 0, Edge::A);
+            if (t.sendB.target() > 0.0f) sendDst(sendBBus_, 1, Edge::B);
         }
-    int maxChain = 0;
-    for (size_t i = 0; i < tracks_.size(); ++i) if (!tracks_[i].isBus) maxChain = std::max(maxChain, chain[i]);
-    for (size_t i = 0; i < tracks_.size(); ++i) {
-        auto& t = tracks_[i];
-        t.pdcSamples = t.isBus ? 0 : maxChain - chain[i];
-        t.pdcL.prepare(t.pdcSamples + 1);  // read(pdc + 1) is pdc samples behind the sample just written
-        t.pdcR.prepare(t.pdcSamples + 1);
+        for (size_t s = 0; s < t.busSends.size(); ++s)
+            if (t.busSends[s].level.target() > 0.0f) edges.push_back({int(i), Edge::Send, s, t.busSends[s].target, -1});
     }
+    std::vector<char> fed(nTracks, 0), retFed(returns_.size(), 0);   // buses and returns that something is routed into; the rest are idle and cost nothing
+    for (size_t i = 0; i < nTracks; ++i) fed[i] = !tracks_[i].isBus;
+    const auto arrive = [&](const Edge& e, int out) {
+        if (e.dstRet >= 0) { retIn[size_t(e.dstRet)] = std::max(retIn[size_t(e.dstRet)], out); retFed[size_t(e.dstRet)] = 1; }
+        else if (e.dstTrack >= 0) { inLat[size_t(e.dstTrack)] = std::max(inLat[size_t(e.dstTrack)], out); fed[size_t(e.dstTrack)] = 1; }
+        else masterIn = std::max(masterIn, out);
+    };
+    for (const int i : order_) {
+        if (!fed[size_t(i)]) continue;
+        outLat[size_t(i)] = inLat[size_t(i)] + tracks_[size_t(i)].latencySamples();
+        for (const auto& e : edges) if (e.src == i) arrive(e, outLat[size_t(i)]);
+    }
+    std::vector<int> retOut(returns_.size(), 0);
+    for (size_t r = 0; r < returns_.size(); ++r) {
+        if (!retFed[r]) continue;
+        retOut[r] = retIn[r] + returns_[r].dev->latencySamples();
+        masterIn = std::max(masterIn, retOut[r]);
+    }
+    const auto dstIn = [&](const Edge& e) { return e.dstRet >= 0 ? retIn[size_t(e.dstRet)] : e.dstTrack >= 0 ? inLat[size_t(e.dstTrack)] : masterIn; };
+    for (auto& t : tracks_) { t.pdcOut = {}; t.pdcA = {}; t.pdcB = {}; t.pdcSend.assign(t.busSends.size(), {}); }
+    for (const auto& e : edges) {
+        auto& t = tracks_[size_t(e.src)];
+        const int d = std::max(dstIn(e) - outLat[size_t(e.src)], 0);
+        switch (e.kind) {
+            case Edge::Out: t.pdcOut.prepare(d); break;
+            case Edge::A: t.pdcA.prepare(d); break;
+            case Edge::B: t.pdcB.prepare(d); break;
+            case Edge::Send: t.pdcSend[e.idx].prepare(d); break;
+            case Edge::Ret: break;
+        }
+    }
+    for (size_t r = 0; r < returns_.size(); ++r) returns_[r].pdcOut.prepare(retFed[r] ? std::max(masterIn - retOut[r], 0) : 0);
     exprByUid_.clear();
     for (size_t i = 0; i < exprSeqs_.size(); ++i) if (exprSeqs_[i].uid) exprByUid_.push_back({exprSeqs_[i].uid, int(i)});
     std::sort(exprByUid_.begin(), exprByUid_.end());
     if (exprByUid_.size() != exprSeqs_.size()) exprByUid_.clear();   // seqs without an identity: fall back to the scan
     int masterLat = 0;
     for (auto& f : masterFx_) masterLat += f.dev->latencySamples();
-    latency_ = maxChain + masterLat;
+    latency_ = masterIn + masterLat;
 }
 
 double Graph::nextBoundaryTicks(double cur) const noexcept {
@@ -308,9 +359,11 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
 #ifdef DDAW_GRAPH_PROFILE
         const auto pf0 = std::chrono::steady_clock::now();
 #endif
-        for (auto& f : t.fx) {
+        for (size_t fi = 0; fi < t.fx.size(); ++fi) {
+            auto& f = t.fx[fi];
             f.dev->process(tl, tr, n, ctx, inputsFor(f, n));
             applyGain(tl, tr, n, advance(f.out, n));
+            if (meters && fi < size_t(kMaxFxMeters) && f.dev->hasReductionMeter()) publishReduction(*meters, i, int(fi), *f.dev);
         }
 #ifdef DDAW_GRAPH_PROFILE
         { const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - pf0).count()); profFxNs[i & 127] += ns; profFxMax[i & 127] = std::max(profFxMax[i & 127], ns); }
@@ -324,15 +377,13 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
             const float g = t.fader.next() * t.muteGain.next();
             tl[k] = a * g; tr[k] = b * g;
         }
-        if (t.pdcSamples > 0)
-            for (int k = 0; k < n; ++k) {
-                t.pdcL.write(tl[k]); t.pdcR.write(tr[k]);
-                tl[k] = t.pdcL.read(t.pdcSamples + 1);
-                tr[k] = t.pdcR.read(t.pdcSamples + 1);
-            }
+        // the output route's signal: delayed for compensation when this route is shorter than the longest into its destination
+        const float* ol = tl;
+        const float* orr = tr;
+        if (t.pdcOut.samples > 0) { t.pdcOut.run(tl, tr, pdcL_.data(), pdcR_.data(), n); ol = pdcL_.data(); orr = pdcR_.data(); }
         if (meters) {
             float pk, rm;
-            MeterBank::peakRms(tl, tr, n, pk, rm);
+            MeterBank::peakRms(ol, orr, n, pk, rm);
             meters->setTrack(i, pk, rm, meterDecay);
         }
         const bool soloMuted = !t.audible;  // mute/solo is baked into muteGain; `audible` only mirrors it for tools
@@ -348,42 +399,45 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
         // distribute (post-fader)
         switch (t.outKind) {
             case TrackStrip::Out::Master:
-                for (int k = 0; k < n; ++k) { mixL_[size_t(k)] += tl[k]; mixR_[size_t(k)] += tr[k]; }
+                for (int k = 0; k < n; ++k) { mixL_[size_t(k)] += ol[k]; mixR_[size_t(k)] += orr[k]; }
                 break;
             case TrackStrip::Out::Delayed: {
                 auto& e = backEdges_[static_cast<size_t>(t.outTarget)];  // the target picks it up a lap later
-                for (int k = 0; k < n; ++k) { e.dl.write(tl[k]); e.dr.write(tr[k]); }
+                for (int k = 0; k < n; ++k) { e.dl.write(ol[k]); e.dr.write(orr[k]); }
                 break;
             }
             case TrackStrip::Out::Bus: {
                 auto& dst = tracks_[static_cast<size_t>(t.outTarget)];
-                for (int k = 0; k < n; ++k) { dst.bufL[size_t(k)] += tl[k]; dst.bufR[size_t(k)] += tr[k]; }
+                for (int k = 0; k < n; ++k) { dst.bufL[size_t(k)] += ol[k]; dst.bufR[size_t(k)] += orr[k]; }
                 break;
             }
         }
+        // a send: the strip's signal, delayed on this route when the send path needs it, scaled into the destination
+        const auto send = [&](PdcLine& line, float* dstL, float* dstR, float level) {
+            const float* sl = tl;
+            const float* sr = tr;
+            if (line.samples > 0) { line.run(tl, tr, sdL_.data(), sdR_.data(), n); sl = sdL_.data(); sr = sdR_.data(); }
+            if (level > 0.0f) addScaled(dstL, dstR, sl, sr, n, level);
+        };
         for (size_t s = 0; s < nBus; ++s) {
-            if (busLevel[s] <= 0.0f) continue;
             auto& dst = tracks_[static_cast<size_t>(t.busSends[s].target)];
-            addScaled(dst.bufL.data(), dst.bufR.data(), tl, tr, n, busLevel[s]);
+            send(t.pdcSend[s], dst.bufL.data(), dst.bufR.data(), busLevel[s]);
         }
         if (!t.isBus) {
-            if (ga > 0.0f) {
-                if (sendABus_ >= 0) { auto& d = tracks_[static_cast<size_t>(sendABus_)]; addScaled(d.bufL.data(), d.bufR.data(), tl, tr, n, ga); }
-                else if (!returns_.empty()) addScaled(returns_[0].bufL.data(), returns_[0].bufR.data(), tl, tr, n, ga);
-            }
-            if (gb > 0.0f) {
-                if (sendBBus_ >= 0) { auto& d = tracks_[static_cast<size_t>(sendBBus_)]; addScaled(d.bufL.data(), d.bufR.data(), tl, tr, n, gb); }
-                else if (returns_.size() > 1) addScaled(returns_[1].bufL.data(), returns_[1].bufR.data(), tl, tr, n, gb);
-            }
+            if (sendABus_ >= 0) { auto& d = tracks_[static_cast<size_t>(sendABus_)]; send(t.pdcA, d.bufL.data(), d.bufR.data(), ga); }
+            else if (!returns_.empty()) send(t.pdcA, returns_[0].bufL.data(), returns_[0].bufR.data(), ga);
+            if (sendBBus_ >= 0) { auto& d = tracks_[static_cast<size_t>(sendBBus_)]; send(t.pdcB, d.bufL.data(), d.bufR.data(), gb); }
+            else if (returns_.size() > 1) send(t.pdcB, returns_[1].bufL.data(), returns_[1].bufR.data(), gb);
         }
-        if (t.fb) for (int k = 0; k < n; ++k) { t.fb->dl.write(tl[k]); t.fb->dr.write(tr[k]); }
+        if (t.fb) for (int k = 0; k < n; ++k) { t.fb->dl.write(ol[k]); t.fb->dr.write(orr[k]); }
     }
 
     // legacy return channels -> master
     for (auto& rn : returns_) {
         rn.dev->process(rn.bufL.data(), rn.bufR.data(), n, ctx, {});
         const float g = advance(rn.gain, n);
-        addScaled(mixL_.data(), mixR_.data(), rn.bufL.data(), rn.bufR.data(), n, g);
+        if (rn.pdcOut.samples > 0) { rn.pdcOut.run(rn.bufL.data(), rn.bufR.data(), sdL_.data(), sdR_.data(), n); addScaled(mixL_.data(), mixR_.data(), sdL_.data(), sdR_.data(), n, g); }
+        else addScaled(mixL_.data(), mixR_.data(), rn.bufL.data(), rn.bufR.data(), n, g);
     }
 
     // the metronome mixes into the master input, ahead of the master gain
@@ -394,9 +448,11 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
         const float g = masterGain_.next();
         mixL_[size_t(k)] *= g; mixR_[size_t(k)] *= g;
     }
-    for (auto& f : masterFx_) {
+    for (size_t fi = 0; fi < masterFx_.size(); ++fi) {
+        auto& f = masterFx_[fi];
         f.dev->process(mixL_.data(), mixR_.data(), n, ctx, inputsFor(f, n));
         applyGain(mixL_.data(), mixR_.data(), n, advance(f.out, n));
+        if (meters && fi < size_t(kMaxFxMeters) && f.dev->hasReductionMeter()) publishReduction(*meters, -1, int(fi), *f.dev);
     }
     std::memcpy(outL, mixL_.data(), size_t(n) * sizeof(float));
     std::memcpy(outR, mixR_.data(), size_t(n) * sizeof(float));

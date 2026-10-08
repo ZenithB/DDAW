@@ -5,6 +5,8 @@
 // a XorShift seeded from FNV-1a over the track id, so repeated renders are bit-identical.
 #include "engine/MidiFx.h"
 
+#include "dsp/Scales.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -27,37 +29,7 @@ struct MNote {
     int expr = -1;   // index of the source note's expression curves; notes the effects invent have none
 };
 
-struct ScaleDef {
-    const char* id;
-    std::span<const int> ivs;
-};
-
-constexpr int kMajor[] = {0, 2, 4, 5, 7, 9, 11};
-constexpr int kMinor[] = {0, 2, 3, 5, 7, 8, 10};
-constexpr int kDorian[] = {0, 2, 3, 5, 7, 9, 10};
-constexpr int kMixo[] = {0, 2, 4, 5, 7, 9, 10};
-constexpr int kPentMaj[] = {0, 2, 4, 7, 9};
-constexpr int kPentMin[] = {0, 3, 5, 7, 10};
-constexpr int kHarmMin[] = {0, 2, 3, 5, 7, 8, 11};
-constexpr int kBlues[] = {0, 3, 5, 6, 7, 10};
-
-// theory.ts SCALES (unknown ids fall back to major).
-const std::array<ScaleDef, 8> kScales{{
-    {"major", kMajor},
-    {"minor", kMinor},
-    {"dorian", kDorian},
-    {"mixo", kMixo},
-    {"pentMaj", kPentMaj},
-    {"pentMin", kPentMin},
-    {"harmMin", kHarmMin},
-    {"blues", kBlues},
-}};
-
-std::span<const int> scaleIvs(const std::string& id) {
-    for (const auto& s : kScales)
-        if (id == s.id) return s.ivs;
-    return kScales[0].ivs;
-}
+std::span<const int> scaleIvs(const std::string& id) { return dsp::scales()[size_t(dsp::scaleIndex(id))].ivs; }
 
 // Rust f64::rem_euclid.
 double remEuclid(double a, double b) {

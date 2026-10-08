@@ -1,6 +1,7 @@
 #include "app/ui/TransportBar.h"
 
 #include "app/model/Timeline.h"
+#include "dsp/Scales.h"
 #include "app/ui/RecordOptions.h"
 
 namespace ddaw::ui {
@@ -9,6 +10,20 @@ TransportBar::TransportBar(app::AppModel& m) : View(m) {
     for (Chip* c : {&play_, &stop_, &rec_, &recOpt_, &metro_, &loop_, &mode_, &undo_, &redo_, &audio_}) addAndMakeVisible(c);
     addAndMakeVisible(bpm_);
     addAndMakeVisible(swing_);
+    addAndMakeVisible(key_);
+    key_.onClick = [this] {
+        const auto& meta = model.project().meta;
+        const int root = ((int(std::lround(meta.root)) % 12) + 12) % 12, scale = dsp::scaleIndex(meta.scale);
+        juce::PopupMenu rootMenu, scaleMenu, menu;
+        for (int i = 0; i < 12; ++i) rootMenu.addItem(100 + i, dsp::noteName(i), true, i == root);
+        for (int i = 0; i < dsp::kScaleCount; ++i) scaleMenu.addItem(200 + i, dsp::scales()[size_t(i)].name, true, i == scale);
+        menu.addSubMenu("Root", rootMenu);
+        menu.addSubMenu("Scale", scaleMenu);
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&key_), [this](int r) {
+            if (r >= 100 && r < 112) model.apply(document::cmd::setMeta("root", double(r - 100)));
+            else if (r >= 200 && r < 200 + dsp::kScaleCount) model.apply(document::cmd::setMeta("scale", std::string(dsp::scales()[size_t(r - 200)].id)));
+        });
+    };
     metro_.setToggleable(true);
     loop_.setToggleable(true);
     mode_.setToggleable(true);
@@ -58,7 +73,8 @@ void TransportBar::resized() {
     place(rec_, 50, 2);
     place(recOpt_, 24, 14);
     place(bpm_, 96);
-    place(swing_, 74, 14);
+    place(swing_, 74, 8);
+    place(key_, 130, 14);
     place(metro_, 58);
     place(loop_, 50);
     place(mode_, 46, 18);
@@ -119,6 +135,7 @@ void TransportBar::refresh(app::ModelEvent) {
     const auto& meta = model.project().meta;
     bpm_.setValue(meta.bpm);
     swing_.setValue(meta.swing * 100.0);
+    key_.setText(juce::String(dsp::noteName(int(std::lround(meta.root)))) + " " + dsp::scales()[size_t(dsp::scaleIndex(meta.scale))].name);
     loop_.setOn(meta.loopOn);
     mode_.setOn(model.arrangementMode());
     mode_.setText(model.arrangementMode() ? "ARR" : "SES");

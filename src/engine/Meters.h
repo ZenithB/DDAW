@@ -12,6 +12,8 @@ namespace ddaw::engine {
 
 constexpr int kMaxMeterTracks = 128;
 constexpr float kMeterReleaseSeconds = 0.3f;  // peak-hold fall time, as in synthyy
+constexpr int kMaxFxMeters = 8;    // effects per strip whose gain reduction is metered (the strip's first eight)
+constexpr int kMaxBands = 3;       // meters per effect (the multiband compressor's bands)
 
 struct MeterSnapshot {
     float trackPeak[kMaxMeterTracks]{}, trackRms[kMaxMeterTracks]{};
@@ -50,6 +52,16 @@ public:
         store(masterRms_, rms);
         store(grDb_, grDb);
     }
+    // Gain reduction of a track's effect (track -1: the master chain), in dB <= 0. Audio thread writes, anyone reads.
+    void setFxGr(int track, int fx, int band, float db) noexcept {
+        if (track < -1 || track >= kMaxMeterTracks || fx < 0 || fx >= kMaxFxMeters || band < 0 || band >= kMaxBands) return;
+        store(fxGr_[idx(track, fx, band)], db);
+    }
+    float fxGr(int track, int fx, int band) const noexcept {
+        if (track < -1 || track >= kMaxMeterTracks || fx < 0 || fx >= kMaxFxMeters || band < 0 || band >= kMaxBands) return 0.0f;
+        return load(fxGr_[idx(track, fx, band)]);
+    }
+    void clearFx() noexcept { for (auto& a : fxGr_) store(a, 0.0f); }   // after a graph swap: the old effects are gone
     void setTrackScene(int i, int scene, double anchorTicks) noexcept {
         if (i < 0 || i >= kMaxMeterTracks) return;
         trackScene_[size_t(i)].store(scene, std::memory_order_relaxed);
@@ -82,6 +94,8 @@ public:
 private:
     static void store(std::atomic<std::uint32_t>& a, float v) noexcept { std::uint32_t b; std::memcpy(&b, &v, 4); a.store(b, std::memory_order_relaxed); }
     static float load(const std::atomic<std::uint32_t>& a) noexcept { std::uint32_t b = a.load(std::memory_order_relaxed); float v; std::memcpy(&v, &b, 4); return v; }
+    static size_t idx(int track, int fx, int band) noexcept { return (size_t(track + 1) * kMaxFxMeters + size_t(fx)) * kMaxBands + size_t(band); }
+    std::array<std::atomic<std::uint32_t>, size_t(kMaxMeterTracks + 1) * kMaxFxMeters * kMaxBands> fxGr_{};
     std::array<std::atomic<std::uint32_t>, kMaxMeterTracks> trackPeak_{}, trackRms_{};
     std::array<std::atomic<int>, kMaxMeterTracks> trackScene_{};
     std::array<std::atomic<std::uint64_t>, kMaxMeterTracks> trackAnchor_{};

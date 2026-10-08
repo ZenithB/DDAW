@@ -101,6 +101,9 @@ public:
     }
 
     bool keyable() const noexcept override { return true; }
+    bool hasReductionMeter() const noexcept override { return true; }
+    int reductionBands() const noexcept override { return 3; }
+    float reductionDb(int band) const noexcept override { return band >= 0 && band < 3 ? -grReport_[size_t(band)] : 0.0f; }   // low, mid, high (dB <= 0)
 
     void process(float* l, float* r, int n, const ProcessContext&, const ModInputs& mod) override {
         if (n <= 0) return;

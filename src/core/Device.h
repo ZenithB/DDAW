@@ -64,12 +64,20 @@ public:
     virtual void reset() = 0;
     virtual int   latencySamples() const { return 0; }
     virtual float gainReductionDb() const { return 0.0f; }
+    // Dynamics devices show how hard they are working: reductionBands() meters (1, or 3 for the multiband compressor), each
+    // reductionDb(band) <= 0 dB. The graph publishes them to the meter bank once per block when hasReductionMeter().
+    virtual bool  hasReductionMeter() const noexcept { return false; }
+    virtual int   reductionBands() const noexcept { return 1; }
+    virtual float reductionDb(int /*band*/) const noexcept { return gainReductionDb(); }
     // Sidechain trigger (duck): a source note fired. Called on the audio thread at a block boundary.
     virtual void  trigger() noexcept {}
     // The project routed a source track to this device (duck's `srcTrack`): switch to sidechain mode.
     virtual void  setSidechain(bool) noexcept {}
     // True for dynamics processors that can run their detector on a key signal (ModInputs::keyL/keyR).
     virtual bool  keyable() const noexcept { return false; }
+    // Control path (builder thread, before prepare): the project's key - root pitch class 0..11 (9 = A) and scale index (dsp/Scales.h) -
+    // for devices that follow it (autotune). Called on every effect; most ignore it.
+    virtual void  setProjectKey(int /*root*/, int /*scale*/) {}
     // Control path (builder thread, before prepare): the device's project identity - its uid and, for a hosted plugin, which
     // plugin it is (DeviceSpec::plugin). Devices that need neither ignore it.
     virtual void  bind(uint64_t /*deviceUid*/, std::string_view /*pluginId*/) {}

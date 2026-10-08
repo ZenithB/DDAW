@@ -6,6 +6,7 @@ namespace ddaw::ui {
 
 namespace {
 constexpr int kKnobW = 58, kKnobH = 80, kPanelHeader = 26, kPad = 8, kTopH = 30;
+constexpr int kMeterW = 12;   // one gain-reduction bar
 constexpr size_t kMaxPluginKnobs = 24;   // a plugin can have hundreds of parameters: the panel shows the first few, its editor has them all
 }
 
@@ -18,12 +19,13 @@ public:
           power_("", col::play), left_("<"), right_(">"), close_("x") {
         info_ = app::deviceInfoFor(chain, d);
         plugin_ = d.type == "plugin";
+        meterBands_ = d.type == "mbcomp" ? 3 : (d.type == "comp" || d.type == "opto" || d.type == "gate") ? 1 : 0;   // gain-reduction meters
         keyable_ = d.type == "comp" || d.type == "opto" || d.type == "mbcomp" || d.type == "gate";   // dynamics: they can detect on another track
         label_ = info_ ? info_->label : (plugin_ ? (d.pluginName.empty() ? juce::String("Plugin") : juce::String(d.pluginName)) : d.type);
         const int rows = std::max(1, (availH - kPanelHeader - kPad - (special() ? 26 : 0)) / kKnobH);
         const size_t n = info_ ? (plugin_ ? std::min(info_->params.size(), kMaxPluginKnobs) : info_->params.size()) : 0;
         const int cols = n ? int((n + size_t(rows) - 1) / size_t(rows)) : 0;
-        width_ = std::max(150, cols * kKnobW + 2 * kPad);
+        width_ = std::max(150, cols * kKnobW + 2 * kPad + (meterBands_ ? meterBands_ * kMeterW + 10 : 0));
         if (chain != app::Chain::Instrument) { for (juce::Component* c : std::initializer_list<juce::Component*>{&power_, &left_, &right_, &close_}) addAndMakeVisible(c); }
         power_.setToggleable(true);
         power_.onToggle = [this](bool on) { model_.apply({"device.set", {{"uid", uid_}, {"field", "on"}, {"value", on}}}); };
@@ -56,9 +58,21 @@ public:
         sync(d);
     }
     int width() const { return width_; }
+    int meterBands() const { return meterBands_; }
     project::Uid uid() const { return uid_; }
     // A plugin's values can change under us (its own editor, automation): follow them.
+    // The gain-reduction bars follow the engine: repaint when a value moved.
+    void updateMeters() {
+        if (!meterBands_) return;
+        bool changed = false;
+        for (int b = 0; b < meterBands_; ++b) {
+            const float v = model_.reductionDb(uid_, b);
+            if (std::abs(v - reduction_[size_t(b)]) > 0.1f) { reduction_[size_t(b)] = v; changed = true; }
+        }
+        if (changed) repaint(getLocalBounds().removeFromRight(meterBands_ * kMeterW + 10));
+    }
     void refreshLive() {
+        updateMeters();
         auto* pp = model_.pluginProvider();
         if (!plugin_ || !pp || !info_) return;
         for (size_t i = 0; i < knobs_.size(); ++i) {
@@ -121,6 +135,18 @@ public:
             g.setColour(col::faint);
             g.setFont(uiFont(11.5f));
             g.drawText(info_ ? "no parameters" : plugin_ ? "plugin not loaded" : "unknown device", juce::Rectangle<int>(0, kPanelHeader, getWidth(), getHeight() - kPanelHeader - 28), juce::Justification::centred);
+        }
+        if (meterBands_) {   // gain reduction: bars grow downward from the top, 24 dB full scale; the multiband compressor has one per band
+            const int top = kPanelHeader + 8, bottom = getHeight() - (special() ? 34 : 12), x0 = getWidth() - 6 - meterBands_ * kMeterW;
+            static const char* names[] = {"L", "M", "H"};
+            for (int b = 0; b < meterBands_; ++b) {
+                const auto bar = juce::Rectangle<float>(float(x0 + b * kMeterW), float(top), float(kMeterW - 3), float(std::max(10, bottom - top - (meterBands_ > 1 ? 12 : 0))));
+                g.setColour(col::black.withAlpha(0.5f)); g.fillRoundedRectangle(bar, 2.0f);
+                const float fill = std::clamp(-reduction_[size_t(b)] / 24.0f, 0.0f, 1.0f);
+                g.setColour(fill > 0.5f ? col::rec : col::meterMid);
+                g.fillRoundedRectangle(bar.withHeight(bar.getHeight() * fill), 2.0f);
+                if (meterBands_ > 1) { g.setColour(col::dim); g.setFont(uiFont(9.5f)); g.drawText(names[b], juce::Rectangle<int>(int(bar.getX()), int(bar.getBottom()) + 1, kMeterW - 3, 11), juce::Justification::centred); }
+            }
         }
         if (!on_) { g.setColour(col::black.withAlpha(0.35f)); g.fillRoundedRectangle(r, 5.0f); }
     }
@@ -265,6 +291,8 @@ private:
     size_t slot_, slots_;
     std::string type_;
     bool plugin_ = false, keyable_ = false;
+    int meterBands_ = 0;
+    std::array<float, 3> reduction_{};
     const app::DeviceInfo* info_ = nullptr;
     juce::String label_;
     int width_ = 150;

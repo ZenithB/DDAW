@@ -298,6 +298,25 @@ void AppModel::replaceDocument(project::Project p, project::Uid nextUid) {
     fixSelection();
 }
 
+float AppModel::reductionDb(project::Uid uid, int band) const {
+    const auto& p = project();
+    for (size_t t = 0; t < p.tracks.size(); ++t) {
+        int slot = 0;
+        for (const auto& f : p.tracks[t].fx) {
+            if (!f.on) continue;                                   // a bypassed device takes no slot in the graph
+            if (f.uid == uid) return engine_.meters().fxGr(int(t), slot, band);
+            ++slot;
+        }
+    }
+    int slot = 0;
+    for (const auto& f : p.masterFx) {
+        if (!f.on) continue;
+        if (f.uid == uid) return engine_.meters().fxGr(-1, slot, band);
+        ++slot;
+    }
+    return 0.0f;
+}
+
 // ---- hosted plugins ----
 
 void AppModel::setPluginProvider(PluginProvider* p) { plugins_ = p; setActivePluginProvider(p); syncPlugins(); }

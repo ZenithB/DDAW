@@ -10,6 +10,8 @@
 #include "devices/schema/Schema.generated.h"
 #include "devices/schema/SchemaB4.h"
 #include "devices/schema/SchemaB6.h"
+#include "devices/schema/SchemaExt.h"
+#include "dsp/Scales.h"
 
 namespace ddaw::app {
 
@@ -65,7 +67,7 @@ std::vector<DeviceInfo> build() {
         {"cheby", "Chebyshev", "Colour", C::Effect, sp(kFxCheby)},
         {"widen", "Widener", "Utility", C::Effect, sp(kFxWiden)},
         {"shift", "Pitch Shift", "Pitch", C::Effect, sp(kFxShift)},
-        {"autotune", "Auto-Tune", "Pitch", C::Effect, sp(kFxAutotune)},
+        {"autotune", "Auto-Tune", "Pitch", C::Effect, sp(kFxAutotuneKey)},
 
         {"scale", "Scale", "MIDI", C::MidiFx, sp(kMidiFxScale)},
         {"chord", "Chord", "MIDI", C::MidiFx, sp(kMidiFxChord)},
@@ -117,6 +119,12 @@ std::string paramLabel(std::string_view key) {
 }
 
 std::string formatParam(const ParamSpec& s, double v) {
+    // a key (autotune): note and scale names, with -1 meaning "the project's"
+    if (s.min < 0.0f && (std::string_view(s.key) == "root" || std::string_view(s.key) == "scale")) {   // (-1 = project: only the key parameters go below 0)
+        const int i = int(std::lround(v));
+        if (i < 0) return "Project";
+        return std::string_view(s.key) == "root" ? std::string(dsp::noteName(i)) : std::string(dsp::scales()[size_t(std::min(i, dsp::kScaleCount - 1))].name);
+    }
     char buf[32];
     const double span = std::fabs(double(s.max) - double(s.min));
     if (s.curve == Curve::Stepped || (span >= 12 && std::fabs(v - std::round(v)) < 1e-9)) std::snprintf(buf, sizeof buf, "%d", int(std::lround(v)));

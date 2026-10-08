@@ -108,6 +108,7 @@ public:
     }
 
     bool keyable() const noexcept override { return true; }
+    bool hasReductionMeter() const noexcept override { return true; }
 
     void process(float* l, float* r, int n, const ProcessContext&, const ModInputs& mod) override {
         if (dirty_) recompute();

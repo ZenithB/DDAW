@@ -5,9 +5,9 @@
 // mode) and the correction in semitones glides toward its target with a `speed` ms time constant.
 // Wet/dry is Tone.CrossFade's equal-power law. Schema: amount, speed (ms), mix, mode (0 Key / 1 Chr).
 //
-// Project key: the Rust device also receives `root` (pitch class, def 9 = A) and `mask` (root-relative
-// scale bitmask, def 0x5AD = minor) as extra set_param keys. The C++ schema has no such params and
-// ProcessContext has no key fields, so they stay at the Rust defaults (A minor); see the report.
+// Key: the Rust device receives `root` (pitch class, def 9 = A) and `mask` (root-relative scale bitmask, def 0x5AD = minor).
+// Here the key is the project's (EffectDevice::setProjectKey; the defaults are the same A minor, so parity is unchanged),
+// unless the device's own `root` / `scale` parameters (-1 = follow the project) say otherwise.
 // Latency: none declared. The splice delay is 1 sample at unity ratio and sweeps 0..60 ms while
 // a correction is being applied; the Rust device has no fixed lookahead.
 #include <algorithm>
@@ -19,13 +19,15 @@
 #include "core/Constants.h"
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
+#include "devices/schema/SchemaExt.h"
+#include "dsp/Scales.h"
 #include "dsp/DelayLine.h"
 #include "dsp/Smoother.h"
 
 namespace ddaw::devices {
 namespace {
 
-enum P : uint16_t { Amount, Speed, Mix, Mode };
+enum P : uint16_t { Amount, Speed, Mix, Mode, Root, Scale };
 
 constexpr int kDetectN = 1024;    // decimated samples
 constexpr int kDetectHop = 512;   // input samples between detections
@@ -114,7 +116,8 @@ class AutotuneFx final : public EffectDevice {
 public:
     AutotuneFx() { mix_.snap(1.0f); }
 
-    std::span<const ParamSpec> params() const override { return schema::kFxAutotune; }
+    std::span<const ParamSpec> params() const override { return schema::kFxAutotuneKey; }
+    void setProjectKey(int root, int scale) override { projRoot_ = root; projScale_ = scale; refreshKey(); }
 
     void prepare(double sr, int) override {
         sr_ = static_cast<float>(std::max(sr, 1.0));
@@ -129,6 +132,8 @@ public:
             case Speed: speedMs_ = v; break;
             case Mix: mix_.setTarget(v); if (fresh_) mix_.snap(v); break;  // pre-audio: no glide from the default
             case Mode: mode_ = static_cast<int>(v); break;
+            case Root: ownRoot_ = std::clamp(static_cast<int>(std::lround(v)), -1, 11); refreshKey(); break;
+            case Scale: ownScale_ = std::clamp(static_cast<int>(std::lround(v)), -1, dsp::kScaleCount - 1); refreshKey(); break;
             default: break;
         }
     }
@@ -157,6 +162,10 @@ public:
     }
 
 private:
+    void refreshKey() noexcept {
+        root_ = ownRoot_ >= 0 ? ownRoot_ : projRoot_;
+        mask_ = dsp::scaleMask(ownScale_ >= 0 ? ownScale_ : projScale_);
+    }
     bool inMask(int pitch) const {
         int d = (pitch - root_) % 12;
         if (d < 0) d += 12;
@@ -221,8 +230,10 @@ private:
     float amount_ = 1.0f, speedMs_ = 20.0f;
     dsp::Smoother mix_;
     int mode_ = 0;
-    int root_ = 9;                 // A; no project-key input yet
-    uint32_t mask_ = 0x5AD;        // minor; no project-key input yet
+    int projRoot_ = 9, projScale_ = 1;   // the project's key (A minor until the builder says otherwise)
+    int ownRoot_ = -1, ownScale_ = -1;   // this device's own, -1: follow the project
+    int root_ = 9;                       // what the detector snaps to now
+    uint32_t mask_ = 0x5AD;
     float cur_ = 0.0f, desired_ = 0.0f;
     std::array<float, kRingLen> ring_{};
     int rw_ = 0;

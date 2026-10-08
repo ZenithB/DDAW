@@ -36,6 +36,10 @@ std::string uniqueDeviceId(const Project& p, const std::string& type);
 // ---- tracks and scenes ----
 Command addTrack(const Project& p, project::TrackKind kind, std::string name = "");
 Command removeTrack(Uid uid);
+// A send/return bus (the destination of the tracks' A or B send knobs): a bus track marked `send` with a fully wet effect,
+// a reverb for A and a delay for B. The letter must be free (hasReturn).
+Command addReturnBus(const Project& p, project::SendBus which);
+bool hasReturn(const Project& p, project::SendBus which);
 Command addScene(const Project& p);
 Command removeScene(const std::string& sceneId);
 

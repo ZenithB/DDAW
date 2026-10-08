@@ -1,4 +1,6 @@
 #include "engine/GraphBuilder.h"
+
+#include "dsp/Scales.h"
 #include "engine/Meters.h"
 
 #include <algorithm>
@@ -104,6 +106,7 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
 
     BuildResult out;
     out.graph = std::make_unique<Graph>(epoch, sr);
+    const int keyRoot = ((int(std::lround(p.meta.root)) % 12) + 12) % 12, keyScale = dsp::scaleIndex(p.meta.scale);   // for devices that follow the project's key
     Graph& g = *out.graph;
     std::set<std::string> issues;
     ParamResolver& res = out.resolver;
@@ -239,6 +242,7 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
             auto dev = createEffect(f.type);
             if (!dev) { issues.insert("effect: " + f.type); continue; }
             dev->bind(f.uid, f.plugin);
+            dev->setProjectKey(keyRoot, keyScale);
             dev->prepare(sr, kMaxBlock);
             const uint8_t slot = static_cast<uint8_t>(kSlotFx0 + s.fx.size());
             applyParams(*dev, f, where + " fx " + f.type, issues, res, tid + "|" + fxIdOf(f) + "|", idx, slot);
@@ -477,6 +481,7 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
         for (const auto& r : p.returns) {
             auto dev = createEffect(r.fxType);
             if (!dev) { issues.insert("effect: " + r.fxType); continue; }
+            dev->setProjectKey(keyRoot, keyScale);
             dev->prepare(sr, kMaxBlock);
             for (auto& [k, v] : r.params) {
                 const int pi = findParam(dev->params(), k);
@@ -496,6 +501,7 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
         auto dev = createEffect(f.type);
         if (!dev) { issues.insert("effect: " + f.type); continue; }
         dev->bind(f.uid, f.plugin);
+        dev->setProjectKey(keyRoot, keyScale);
         dev->prepare(sr, kMaxBlock);
         FxSlot& slot = g.addMasterFx();
         const uint8_t slotIdx = static_cast<uint8_t>(kSlotFx0 + g.masterFxCount() - 1);

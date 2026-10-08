@@ -284,8 +284,8 @@ Within the 50 ms target in both cases. The YIN window dominates; raising the pit
 Follow-ups surfaced by the ports (none blocks A3):
 
 1. ~~**Sidechain/trigger input** for `duck`~~ Done in A3: `EffectDevice::trigger()` and `setSidechain()`, driven by the engine when a note fires on the source track.
-2. **Key and scale context** for `autotune`: ProcessContext has no `keyRoot`/`scaleMask`, so it always snaps to A minor. The Rust baseline was also produced with those defaults (a C# major experiment scored lower), so parity is unaffected, but the device is incomplete.
-3. **Per-band gain-reduction meter** for `mbcomp`: `gainReductionDb()` returns the deepest band; the three band values are kept but not exposed.
+2. ~~**Key and scale context** for `autotune`~~ Done (ARCH 25): it follows the project key, with its own `root` and `scale` parameters. (Was: ProcessContext has no `keyRoot`/`scaleMask`, so it always snaps to A minor.) The Rust baseline was also produced with those defaults (a C# major experiment scored lower), so parity is unaffected, but the device is incomplete.
+3. ~~**Per-band gain-reduction meter** for `mbcomp`~~ Done (ARCH 25): per-band and per-device meters reach the UI.
 4. **Drum sample slots** (`set_sample`) are not ported; every pad synthesizes. Done in A4 with the sample bank.
 5. **Float-sine LFO variant:** `trem` sits 0.0016 below baseline because the shared `dsp::Lfo` evaluates sin in double (as Rust's `lfo.rs` does) while Rust's `trem` uses an inline float sin. Add a float variant only if the gap matters.
 6. **Latency reporting:** `dist`, `crush`, `cheby` do not report the oversampler's roughly 33-sample delay (matching Rust); `gate`'s lookahead is a creative delay and reports 0. Decide before delay compensation matters for these.
@@ -318,7 +318,7 @@ Follow-ups surfaced by the ports (none blocks A3):
 - **Audio clips and tracks:** session loop and one-shot re-fire, arrangement start/stop with fade-out, pitch, reverse, crop, loop crossfade, gain, fades; callback-size independent (test).
 - **Checkpoint terms (2026-10-05):** re-checked upstream: the DDSP repository is Apache-2.0 and its README says nothing about the pretrained checkpoints or their training data, so the terms stay unconfirmed. Enforced instead of decided: the weights are never committed (`scripts/check_no_weights.sh`, run in CI), `NOTICE` credits Magenta (Apache-2.0, 2019 Google LLC) and the other dependencies, and the app and tests work without the weights (the DDSP tests skip). A binary release that bundles weights needs written confirmation first; otherwise ship without them.
 - **Decided (2026-10-05):** synthyy will be released under the AGPL, the same licence as DDAW (AGPL-3.0), so porting its code and fixtures into DDAW needs no relicensing. `LICENSE` (the unmodified GNU AGPL-3.0 text from gnu.org) is in the tree root.
-- **Still open (needs the user):** git, CI gating of parity (Git LFS), checkpoint licence, ASan/TSan. Engine gaps: `autotune` key/scale, per-band `mbcomp` meters, `dest "midi"` modulation, PDC for sends.
+- **Still open (needs the user):** git, CI gating of parity (Git LFS), checkpoint licence, ASan/TSan. Engine gaps: `autotune` key/scale, per-band `mbcomp` meters, `dest "midi"` modulation, PDC for sends (all but `dest "midi"` done 2026-10-07, ARCH 25).
 
 **A5 (native UI), 2026-10-03:** the application is usable end to end: open or create a project, build a song in the session grid and the arrangement, edit notes, mix, add and tune devices, save, export audio. 435 tests pass in Debug and Release, including 9 UI cases (interaction and export) and the live-engine model test.
 
@@ -397,3 +397,7 @@ Done: hosted VST3 and AudioUnit instruments and effects as `plugin` devices (a s
 ### Sidechain (2026-10-06)
 
 Done: a source-track sidechain, optional on every dynamics device (`comp`, `opto`, `mbcomp`, `gate`; per device, in the device chain), with a key filter, on track and master chains; ARCH 24. Not done: bus sources, stereo keys, hosted plugins' sidechain buses.
+
+### Mixer and engine follow-ups (2026-10-07)
+
+Done: return strips in the mixer (a returns group, "+ Return", built-in returns of imported projects), autotune key and scale (project key with an editor in the transport bar, plus per-device overrides), gain-reduction meters for every dynamics device and per band for the multiband compressor, and delay compensation of sends (per-route, ARCH 10). Remaining engine gap: `dest "midi"` modulation.

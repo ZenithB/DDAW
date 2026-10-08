@@ -134,4 +134,10 @@ TEST_CASE("sidechain: the multiband compressor reduces the bands its key excites
     };
     CHECK(band(keyed, 100.0) < 0.5 * band(own, 100.0));              // the key's band is pulled down
     CHECK(band(keyed, 4000.0) > 0.8 * band(own, 4000.0));            // the others are not
+    // the per-band meters say the same: the low band is working, the high band is not
+    REQUIRE(d->hasReductionMeter());
+    REQUIRE(d->reductionBands() == 3);
+    CHECK(d->reductionDb(0) < -3.0f);
+    CHECK(d->reductionDb(2) > -0.5f);
+    CHECK(d->gainReductionDb() == Approx(std::min({d->reductionDb(0), d->reductionDb(1), d->reductionDb(2)})));   // the overall meter is the deepest band
 }

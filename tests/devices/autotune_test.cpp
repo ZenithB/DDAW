@@ -9,6 +9,7 @@
 
 using namespace ddaw;
 using namespace ddaw::testkit;
+using Catch::Approx;
 
 namespace {
 std::unique_ptr<EffectDevice> make() { return createEffect("autotune"); }
@@ -82,4 +83,62 @@ TEST_CASE("autotune: an in-scale note passes at (almost) the same pitch", "[devi
 TEST_CASE("autotune: amount 0 applies no correction", "[device][autotune]") {
     const auto x = runSine(445.0f, 0.0f, 20.0f, 1.0f, 1.0f, 2.0);
     CHECK(peakHz(x, 22050, 420.0, 460.0, 0.5) == Catch::Approx(445.0).margin(1.0));
+}
+
+// ---- the key ----
+
+namespace {
+// Steady sine at `hz` through autotune with the given key (root/scale parameters; -1 follows the device's project key).
+std::vector<float> tuned(float hz, int projRoot, int projScale, float ownRoot, float ownScale, double seconds = 2.0) {
+    auto d = make(); d->prepare(kSr, kMaxBlock);
+    d->setProjectKey(projRoot, projScale);
+    d->setParam(0, 1.0f); d->setParam(1, 5.0f); d->setParam(2, 1.0f); d->setParam(3, 0.0f);
+    d->setParam(4, ownRoot); d->setParam(5, ownScale);
+    d->reset();
+    const size_t total = static_cast<size_t>(seconds * kSr);
+    std::vector<float> out, l(kMaxBlock), r(kMaxBlock);
+    for (size_t t = 0; t < total; t += kMaxBlock) {
+        for (int i = 0; i < kMaxBlock; ++i)
+            l[size_t(i)] = r[size_t(i)] = 0.5f * float(std::sin(2.0 * std::numbers::pi * double(hz) * double(t + size_t(i)) / kSr));
+        d->process(l.data(), r.data(), kMaxBlock, ctx(), {});
+        out.insert(out.end(), l.begin(), l.end());
+    }
+    return out;
+}
+double hzOf(int midi) { return 440.0 * std::pow(2.0, (midi - 69) / 12.0); }
+}  // namespace
+
+TEST_CASE("autotune: the key is the project's by default, and the device's own root and scale override it", "[device][autotune][key]") {
+    // C#4 (61) is out of A minor (it snaps down to C, 60) and in A major (it stays)
+    const float cSharp = float(hzOf(61)), c = float(hzOf(60));
+    const auto minor = tuned(cSharp, 9, 1, -1, -1);
+    CHECK(peakHz(minor, 8192, c * 0.97, c * 1.03, 0.5) == Approx(c).margin(c * 0.012));
+    const auto major = tuned(cSharp, 9, 0, -1, -1);                       // the project in A major: nothing to correct
+    CHECK(peakHz(major, 8192, cSharp * 0.97, cSharp * 1.03, 0.5) == Approx(cSharp).margin(cSharp * 0.012));
+    // the device's own key beats the project's: project A minor, device A major
+    const auto own = tuned(cSharp, 9, 1, 9, 0);
+    CHECK(peakHz(own, 8192, cSharp * 0.97, cSharp * 1.03, 0.5) == Approx(cSharp).margin(cSharp * 0.012));
+    // and a different root: project A minor, device C# minor (C# is the tonic: it stays)
+    const auto root = tuned(cSharp, 9, 1, 1, 1);
+    CHECK(peakHz(root, 8192, cSharp * 0.97, cSharp * 1.03, 0.5) == Approx(cSharp).margin(cSharp * 0.012));
+}
+
+TEST_CASE("autotune: with no key given it still snaps to A minor, as the port always did", "[device][autotune][key]") {
+    auto d = make();
+    CHECK(d->params().size() == 6);
+    CHECK(d->params()[4].def == -1.0f);
+    CHECK(d->params()[5].def == -1.0f);
+    const float cSharp = float(hzOf(61)), c = float(hzOf(60));
+    auto x = [&] {
+        d->prepare(kSr, kMaxBlock);
+        d->setParam(1, 5.0f); d->reset();
+        std::vector<float> out, l(kMaxBlock), r(kMaxBlock);
+        for (size_t t = 0; t < 2 * 48000; t += kMaxBlock) {
+            for (int i = 0; i < kMaxBlock; ++i) l[size_t(i)] = r[size_t(i)] = 0.5f * float(std::sin(2.0 * std::numbers::pi * double(cSharp) * double(t + size_t(i)) / kSr));
+            d->process(l.data(), r.data(), kMaxBlock, ctx(), {});
+            out.insert(out.end(), l.begin(), l.end());
+        }
+        return out;
+    }();
+    CHECK(peakHz(x, 8192, c * 0.97, c * 1.03, 0.5) == Approx(c).margin(c * 0.012));
 }

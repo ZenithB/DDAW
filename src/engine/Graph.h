@@ -60,6 +60,16 @@ struct AudioRoute {
     size_t ordinal = 0;              // index among the target's A-rate parameters
 };
 
+// Delay compensation on one route (see Graph::finalize): the strip's signal is delayed by `samples` on its way to that destination.
+struct PdcLine {
+    dsp::DelayLine l, r;
+    int samples = 0;
+    void prepare(int d) { samples = d; if (d > 0) { l.prepare(d + 1); r.prepare(d + 1); } }   // read(d + 1) is d samples behind the sample just written
+    void run(const float* inL, const float* inR, float* outL, float* outR, int n) noexcept {
+        for (int k = 0; k < n; ++k) { l.write(inL[k]); r.write(inR[k]); outL[k] = l.read(samples + 1); outR[k] = r.read(samples + 1); }
+    }
+};
+
 struct FxSlot {
     std::unique_ptr<EffectDevice> dev;
     dsp::Smoother out;  // linear gain from the device's `out` (dB)
@@ -100,8 +110,10 @@ struct TrackStrip {
     TrackSched sched;
     AudioPlayer audio;              // audio clips (audio tracks)
     std::vector<float> bufL, bufR;  // input accumulation (buses, and the inputs of any track routed into one)
-    dsp::DelayLine pdcL, pdcR;      // delay compensation at the strip output
-    int pdcSamples = 0;
+    // Delay compensation per route (finalize): the output route (master or a bus), the A and B sends, and each bus send, so that
+    // every path into a summing point (a bus input, the master) arrives with the same delay, send paths included.
+    PdcLine pdcOut, pdcA, pdcB;
+    std::vector<PdcLine> pdcSend;   // parallel to busSends
 
     int latencySamples() const;
 };
@@ -119,6 +131,7 @@ struct ReturnNode {
     std::unique_ptr<EffectDevice> dev;
     dsp::Smoother gain;
     std::vector<float> bufL, bufR;
+    PdcLine pdcOut;                 // return -> master
 };
 
 // A sidechain route: a note fired on `src` triggers the duck at (track, fx slot) or on the master chain.
@@ -261,7 +274,7 @@ private:
     double launchQ_ = 1, loopStart_ = 0, loopEnd_ = 4 * 384;
     int tsTop_ = 4, tsBottom_ = 4;
     bool loopOn_ = false;
-    std::vector<float> mixL_, mixR_, tmpL_, tmpR_;
+    std::vector<float> mixL_, mixR_, tmpL_, tmpR_, pdcL_, pdcR_, sdL_, sdR_;   // pdc*: the output route delayed; sd*: a send or return delayed
     std::array<Active, kMaxActive> active_{};
     size_t nActive_ = 0;
     struct ExprPlayer { uint16_t track; uint32_t noteId; double start, end; int seq; std::array<float, 3> last; std::array<uint32_t, 3> idx; uint64_t uid; };

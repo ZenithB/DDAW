@@ -82,6 +82,28 @@ Command addTrack(const Project& p, project::TrackKind kind, std::string name) {
     t.inst.id = *inst ? "inst" : "";
     return {"track.insert", {{"index", p.tracks.size()}, {"track", project::trackToJson(t)}}};
 }
+bool hasReturn(const Project& p, project::SendBus which) {
+    for (auto& t : p.tracks) if (t.kind == project::TrackKind::Bus && t.send == which) return true;
+    return false;
+}
+
+Command addReturnBus(const Project& p, project::SendBus which) {
+    const char letter = which == project::SendBus::A ? 'A' : which == project::SendBus::B ? 'B' : 'F';
+    project::Track t;
+    t.id = uniqueTrackId(p);
+    t.kind = project::TrackKind::Bus;
+    t.name = std::string("Return ") + letter;
+    t.send = which;
+    t.inst.type = "audiobus";
+    t.inst.id = "inst";
+    project::DeviceSpec fx;
+    fx.type = which == project::SendBus::B ? "delay" : "reverb";
+    fx.id = uniqueDeviceId(p, fx.type);
+    fx.params["mix"] = 1.0;           // a return carries only the effect
+    t.fx.push_back(fx);
+    return {"track.insert", {{"index", p.tracks.size()}, {"track", project::trackToJson(t)}}};
+}
+
 Command removeTrack(Uid uid) { return {"track.remove", {{"uid", uid}}}; }
 Command addScene(const Project& p) { return {"scene.insert", {{"index", p.scenes.size()}, {"id", uniqueSceneId(p)}}}; }
 Command removeScene(const std::string& id) { return {"scene.remove", {{"id", id}}}; }

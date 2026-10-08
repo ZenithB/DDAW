@@ -7,7 +7,7 @@ C++20 / JUCE 8 desktop audio workstation built around DDSP synthesis (macOS, App
 ## Context
 
 - synthyy (`~/Documents/synthyy`, Rust/Tauri) is the read-only reference implementation. Its golden fixtures are the port tests. Never write to that repo.
-- Current milestone: M0 (repo scaffold, CMake, JUCE 8, test framework, fixture harness, finalise ARCH.md) together with B1 (Magenta DDSP decoder spike: checkpoint to RTNeural, Python vs C++ null test, latency measurement).
+- Status (2026-10-06): milestones M0, A1-A6, B1-B6 and the sidechain are done; L1 (plugin hosting) is started (ARCH 23). The honest list of what is not done or not verified is at the end of docs/PLAN.md. Next candidates: out-of-process plugin hosting, L2 custom training, hardware checks.
 
 ## Hard rules
 

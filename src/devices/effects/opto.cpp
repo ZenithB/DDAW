@@ -99,6 +99,7 @@ public:
     }
 
     bool keyable() const noexcept override { return true; }
+    bool hasReductionMeter() const noexcept override { return true; }
 
     void process(float* l, float* r, int n, const ProcessContext&, const ModInputs& mod) override {
         const size_t len = delayL_.size();

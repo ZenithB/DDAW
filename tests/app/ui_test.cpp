@@ -14,6 +14,7 @@
 #include "app/ui/MainComponent.h"
 #include "app/ui/MixerView.h"
 #include "app/ui/SessionView.h"
+#include "app/ui/TransportBar.h"
 #include "plugins/PluginHost.h"
 
 using namespace ddaw;
@@ -450,7 +451,10 @@ TEST_CASE("mixer: fader, mute and rename route to the document, one undo step pe
     std::vector<ui::Chip*> chips;
     findAll(v, chips);
     REQUIRE_FALSE(chips.empty());
-    chips[0]->mouseUp(Mouse(*chips[0]).ev(pt(5, 5)));    // first strip's mute chip
+    ui::Chip* mute = nullptr;
+    for (auto* c : chips) if (c->text() == "M") { mute = c; break; }   // the first strip's mute chip
+    REQUIRE(mute);
+    mute->mouseUp(Mouse(*mute).ev(pt(5, 5)));
     CHECK(r.m->project().tracks[0].mute);
 }
 
@@ -1438,4 +1442,104 @@ TEST_CASE("device chain: a dynamics device shows its sidechain source and follow
     int n = 0;
     for (auto* c : chips) if (c->text().startsWith("Sidechain")) ++n;
     CHECK(n == 1);                                                    // the compressor's only
+}
+
+TEST_CASE("mixer: send returns have their own group, the + Return button adds A then B, and send knobs show whether they lead anywhere", "[ui][mixer][returns]") {
+    Rig r; r.demo();
+    auto& m = *r.m;
+    ui::MixerView v(m);
+    v.setSize(1300, 560);
+    v.refresh(app::ModelEvent::Document);
+    CHECK(v.returnCount() == 0);
+    REQUIRE(v.addReturnVisible());
+    auto sendKnobAlpha = [&](int strip, int which) {   // the track strips' A and B knobs are the 3rd/4th Knobs of a strip (pan, A, B order by creation: pan_, sendA_, sendB_)
+        std::vector<ui::Knob*> ks;
+        findAll(v, ks);
+        (void)strip;
+        return ks.at(size_t(strip * 3 + which))->getAlpha();
+    };
+    CHECK(sendKnobAlpha(0, 1) < 0.5f);                  // no return A yet: the send does nothing, and says so
+    CHECK(sendKnobAlpha(0, 2) < 0.5f);
+
+    v.addReturn();                                      // the button: A
+    v.refresh(app::ModelEvent::Document);
+    REQUIRE(m.project().tracks.size() == 7);
+    const auto& a = m.project().tracks.back();
+    CHECK(a.kind == project::TrackKind::Bus);
+    CHECK(a.send == project::SendBus::A);
+    CHECK(a.name == "Return A");
+    REQUIRE(a.fx.size() == 1);
+    CHECK(a.fx[0].type == "reverb");
+    CHECK(a.fx[0].params.at("mix") == Approx(1.0));     // a return carries only the effect
+    CHECK(v.returnCount() == 1);
+    CHECK(v.stripCount() == 7);
+    CHECK(sendKnobAlpha(0, 1) > 0.9f);
+    CHECK(sendKnobAlpha(0, 2) < 0.5f);                  // B still has no return
+    REQUIRE(v.addReturnVisible());
+
+    v.addReturn();                                      // then B
+    v.refresh(app::ModelEvent::Document);
+    CHECK(m.project().tracks.back().send == project::SendBus::B);
+    CHECK(m.project().tracks.back().fx[0].type == "delay");
+    CHECK(v.returnCount() == 2);
+    CHECK_FALSE(v.addReturnVisible());                  // A and B are taken
+    CHECK(sendKnobAlpha(0, 2) > 0.9f);
+
+    // the returns sit after the tracks and buses whatever their place in the document: the last strips are the returns
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth, "Late"));   // a track added after the returns in the document
+    v.refresh(app::ModelEvent::Document);
+    CHECK(v.stripCount() == 9);
+    CHECK(v.returnCount() == 2);
+    // removing a return takes its strip, and the button is back
+    m.apply(edit::removeTrack(m.project().tracks[7].uid));   // Return A
+    v.refresh(app::ModelEvent::Document);
+    CHECK(v.returnCount() == 1);
+    CHECK(v.addReturnVisible());
+}
+
+TEST_CASE("mixer: an imported project's built-in returns get strips whose faders edit the return", "[ui][mixer][returns]") {
+    Rig r;
+    auto& m = *r.m;
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
+    m.apply({"return.insert", {{"index", 0}, {"ret", {{"id", "r1"}, {"name", "Hall"}, {"fxType", "reverb"}, {"params", {{"mix", 1.0}}}, {"gain", -6.0}}}}});
+    ui::MixerView v(m);
+    v.setSize(1000, 560);
+    v.refresh(app::ModelEvent::Document);
+    REQUIRE(v.legacyReturnCount() == 1);
+    std::vector<ui::Fader*> faders;
+    findAll(v, faders);
+    REQUIRE(faders.size() == 3);                         // the track, the built-in return, the master
+    CHECK(faders[1]->db() == Approx(-6.0));
+    {
+        Mouse mo(*faders[1]);
+        const int h = faders[1]->getHeight();
+        mo.down(pt(20, h / 2)).drag(pt(20, h / 6)).up(pt(20, h / 6));
+    }
+    CHECK(m.project().returns[0].gainDb > -6.0);
+    CHECK(m.project().returns[0].params.at("mix") == Approx(1.0));   // the effect's settings are kept
+    m.undo();
+    CHECK(m.project().returns[0].gainDb == Approx(-6.0));            // one gesture, one undo step
+}
+
+TEST_CASE("transport: the project's key is shown and follows the document", "[ui][transport][key]") {
+    Rig r;
+    auto& m = *r.m;
+    ui::TransportBar v(m);
+    v.setSize(1300, 48);
+    v.refresh(app::ModelEvent::Document);
+    auto keyText = [&]() -> juce::String {
+        std::vector<ui::Chip*> chips;
+        findAll(v, chips);
+        for (auto* c : chips) if (c->text().contains("Minor") || c->text().contains("Major") || c->text().contains("Dorian") || c->text().contains("Blues")) return c->text();
+        return {};
+    };
+    CHECK(keyText() == "A Minor");
+    REQUIRE(m.apply(document::cmd::setMeta("root", 2.0)));
+    REQUIRE(m.apply(document::cmd::setMeta("scale", std::string("dorian"))));
+    v.refresh(app::ModelEvent::Document);
+    CHECK(keyText() == "D Dorian");
+    m.undo();
+    m.undo();
+    v.refresh(app::ModelEvent::Document);
+    CHECK(keyText() == "A Minor");
 }

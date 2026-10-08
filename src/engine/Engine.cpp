@@ -119,6 +119,7 @@ void Engine::pollIncomingGraph() noexcept {
         liveEpoch_.store(cur_->epoch(), std::memory_order_release);
         latency_.store(masterLatency() + cur_->latencySamples(), std::memory_order_relaxed);
         meters_.clearTracks(cur_->trackCount());
+        meters_.clearFx();
         diag_.graphSwaps.fetch_add(1, std::memory_order_relaxed);
     }
 }
