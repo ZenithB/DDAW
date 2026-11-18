@@ -40,6 +40,8 @@ Command removeTrack(Uid uid);
 // a reverb for A and a delay for B. The letter must be free (hasReturn).
 Command addReturnBus(const Project& p, project::SendBus which);
 bool hasReturn(const Project& p, project::SendBus which);
+// The buses a track or bus can send to: every bus but itself, and (for a bus) none that already leads back to it.
+std::vector<const project::Track*> sendTargets(const Project& p, Uid src);
 Command addScene(const Project& p);
 Command removeScene(const std::string& sceneId);
 

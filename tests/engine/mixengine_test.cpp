@@ -207,3 +207,75 @@ TEST_CASE("gain-reduction meters: track and master dynamics devices publish thei
     CHECK(meters.fxGr(-1, 0, 0) == 0.0f);
     CHECK(meters.fxGr(500, 0, 0) == 0.0f);              // out of range reads zero, never faults
 }
+
+// ---- per-bus sends ----
+
+TEST_CASE("bus sends: a bus can send to another bus, and the level is the send's", "[mixengine][engine][sends]") {
+    // a source feeds the master directly and sends fully to bus "d"; bus "d" (to the master) sends to bus "r", which has -6 dB of
+    // fader: the send adds d's signal through r. (Tracks reach buses through sends; only buses have an output route.)
+    auto text = [](const std::string& sends) {
+        return R"({"scope":{"kind":"live"},"project":{"meta":{"bpm":120},"scenes":[{"id":"s"}],"tracks":[
+          {"id":"src","kind":"synth","inst":{"type":"poly","params":{"wave":3,"attack":0.002,"sustain":1.0,"release":0.05}},"fx":[],"gain":0,"pan":0,"sends":{"d":1.0}},
+          {"id":"d","kind":"bus","inst":{"type":"audiobus","params":{}},"fx":[],"gain":0,"pan":0)" + sends + R"(},
+          {"id":"r","kind":"bus","inst":{"type":"audiobus","params":{}},"fx":[],"gain":-6,"pan":0}],
+          "clips":{}}})";
+    };
+    auto level = [&](const std::string& sends) {
+        auto br = buildGraph(project::importFixtureJson(text(sends)), kSr, 1);
+        REQUIRE(br.complete());
+        br.graph->noteOn(0, 57, 1.0f, 1);
+        std::vector<float> l(128), r(128);
+        const ProcessContext ctx{kSr, 0.0, 120.0, true, false, 0.0, 0.0, 4, 4};
+        double sum = 0; int n = 0;
+        for (int b = 0; b < 100; ++b) { br.graph->process(l.data(), r.data(), 128, ctx, nullptr, 1.0f); if (b > 50) for (float v : l) { sum += double(v) * v; ++n; } }
+        return std::sqrt(sum / n);
+    };
+    const double dry = level("");                                  // the source plus its copy through d
+    const double wet = level(R"(,"sends":{"r":1.0})");
+    const double half = level(R"(,"sends":{"r":0.5})");
+    const double g = std::pow(10.0, -6.0 / 20.0);
+    CHECK(dry > 0.01);
+    CHECK(wet == Approx(dry * (1.0 + 0.5 * g)).epsilon(0.02));       // two copies (source, d) plus d's copy through r at -6 dB
+    CHECK(half == Approx(dry * (1.0 + 0.25 * g)).epsilon(0.02));
+}
+
+// ---- effects that follow the notes ----
+
+TEST_CASE("note-following effects: the chord resonator is told its track's notes, publishes the tonic, and keeps it across a graph swap", "[mixengine][engine][notes]") {
+    const std::string text = R"({"scope":{"kind":"live"},"project":{"meta":{"bpm":120},"scenes":[{"id":"s"}],"tracks":[
+      {"id":"t1","kind":"synth","inst":{"type":"poly","params":{"wave":3,"attack":0.002,"sustain":1.0,"release":0.05}},
+       "fx":[{"type":"reverb","on":true,"params":{"mix":0}},{"type":"chordres","on":true,"params":{"source":1,"filters":2,"i1":4,"i2":7,"boost":12}}],"gain":0,"pan":0},
+      {"id":"t2","kind":"synth","inst":{"type":"poly","params":{"wave":3,"attack":0.002,"sustain":1.0}},
+       "fx":[{"type":"chordres","on":true,"params":{"source":1}}],"gain":0,"pan":0}],"clips":{}}})";
+    auto br = buildGraph(project::importFixtureJson(text), kSr, 1);
+    REQUIRE(br.complete());
+    MeterBank meters;
+    std::vector<float> l(128), r(128);
+    const ProcessContext ctx{kSr, 0.0, 120.0, true, false, 0.0, 0.0, 4, 4};
+    auto run = [&](Graph& g, int blocks) { for (int b = 0; b < blocks; ++b) g.process(l.data(), r.data(), 128, ctx, &meters, 0.9f); };
+    run(*br.graph, 4);
+    CHECK(meters.fxInfo(0, 1) < 0.0f);                          // nothing played yet: no tonic
+    CHECK(meters.fxInfo(0, 0) == -1.0f);                        // the reverb publishes nothing
+    br.graph->noteOn(0, 57, 1.0f, 1);
+    run(*br.graph, 4);
+    CHECK(meters.fxInfo(0, 1) == Approx(57.0f).margin(0.01));   // the track's note reached its effect
+    CHECK(meters.fxInfo(1, 0) < 0.0f);                          // not the other track's
+    br.graph->noteOn(1, 62, 1.0f, 2);
+    run(*br.graph, 4);
+    CHECK(meters.fxInfo(1, 0) == Approx(62.0f).margin(0.01));
+    CHECK(meters.fxInfo(0, 1) == Approx(57.0f).margin(0.01));
+
+    // a rebuilt graph (an edit) picks the sounding notes up again
+    auto next = buildGraph(project::importFixtureJson(text), kSr, 2);
+    REQUIRE(next.complete());
+    next.graph->inheritNotes(*br.graph);
+    meters.clearFx();
+    run(*next.graph, 4);
+    CHECK(meters.fxInfo(0, 1) == Approx(57.0f).margin(0.01));
+    CHECK(meters.fxInfo(1, 0) == Approx(62.0f).margin(0.01));
+
+    // note-off leaves the resonance on the last tonic (it rings out with the sound); all-notes-off does not crash or lose it
+    next.graph->allNotesOff();
+    run(*next.graph, 4);
+    CHECK(meters.fxInfo(0, 1) == Approx(57.0f).margin(0.01));
+}

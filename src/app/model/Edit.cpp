@@ -87,6 +87,18 @@ bool hasReturn(const Project& p, project::SendBus which) {
     return false;
 }
 
+std::vector<const project::Track*> sendTargets(const Project& p, Uid src) {
+    std::vector<const project::Track*> out;
+    const auto* s = findTrack(p, src);
+    if (!s) return out;
+    for (auto& t : p.tracks) {
+        if (t.kind != project::TrackKind::Bus || t.uid == src) continue;
+        if (project::busReaches(p, t.id, s->id)) continue;   // it already feeds the sender: a send back would be a loop
+        out.push_back(&t);
+    }
+    return out;
+}
+
 Command addReturnBus(const Project& p, project::SendBus which) {
     const char letter = which == project::SendBus::A ? 'A' : which == project::SendBus::B ? 'B' : 'F';
     project::Track t;

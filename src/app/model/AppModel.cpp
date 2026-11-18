@@ -298,23 +298,33 @@ void AppModel::replaceDocument(project::Project p, project::Uid nextUid) {
     fixSelection();
 }
 
-float AppModel::reductionDb(project::Uid uid, int band) const {
-    const auto& p = project();
+// The graph's meter slot of an effect: its place among the enabled effects of its track (or of the master chain).
+static bool fxSlotOf(const project::Project& p, project::Uid uid, int& track, int& slot) {
     for (size_t t = 0; t < p.tracks.size(); ++t) {
-        int slot = 0;
+        int k = 0;
         for (const auto& f : p.tracks[t].fx) {
             if (!f.on) continue;                                   // a bypassed device takes no slot in the graph
-            if (f.uid == uid) return engine_.meters().fxGr(int(t), slot, band);
-            ++slot;
+            if (f.uid == uid) { track = int(t); slot = k; return true; }
+            ++k;
         }
     }
-    int slot = 0;
+    int k = 0;
     for (const auto& f : p.masterFx) {
         if (!f.on) continue;
-        if (f.uid == uid) return engine_.meters().fxGr(-1, slot, band);
-        ++slot;
+        if (f.uid == uid) { track = -1; slot = k; return true; }
+        ++k;
     }
-    return 0.0f;
+    return false;
+}
+
+float AppModel::reductionDb(project::Uid uid, int band) const {
+    int t, s;
+    return fxSlotOf(project(), uid, t, s) ? engine_.meters().fxGr(t, s, band) : 0.0f;
+}
+
+float AppModel::deviceValue(project::Uid uid) const {
+    int t, s;
+    return fxSlotOf(project(), uid, t, s) ? engine_.meters().fxInfo(t, s) : -1.0f;
 }
 
 // ---- hosted plugins ----

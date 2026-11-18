@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     std::string popup;   // "export" or "record": render that dialog alone
     int w = 1440, h = 900;
     std::string mainTab = "session", detail = "devices", selClip, instrument, lane, pluginId;
-    bool returns = false;
+    bool returns = false, chordres = false;
     int selTrack = -1;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -44,6 +44,7 @@ int main(int argc, char** argv) {
         else if (a == "--select-track") selTrack = std::stoi(next());
         else if (a == "--select-clip") selClip = next();
         else if (a == "--plugin") pluginId = next();   // add this hosted plugin (a plugin id) as an effect to the selected track
+        else if (a == "--chordres") chordres = true;   // add a chord resonator (a maj7 voicing, boosted) to the selected track
         else if (a == "--returns") returns = true;   // add send returns A and B and some sends, to see the mixer with them
         else if (a == "--lane") lane = next();   // piano roll lane: slide | pressure | bend (with some curves drawn on the first notes)
         else if (a == "--instrument") instrument = next();   // replace the selected track's instrument first
@@ -133,6 +134,16 @@ int main(int argc, char** argv) {
         model.apply(app::edit::addReturnBus(model.project(), project::SendBus::A));
         model.apply(app::edit::addReturnBus(model.project(), project::SendBus::B));
         for (size_t i = 1; i < 4 && i < model.project().tracks.size(); ++i) model.apply(document::cmd::setTrack(model.project().tracks[i].uid, "sendA", 0.25 * double(i)));
+    }
+    if (chordres && model.selection().track) {
+        model.apply(app::edit::addDevice(model.project(), model.selection().track, "fx", "chordres"));
+        const auto* t = app::edit::findTrack(model.project(), model.selection().track);
+        if (t && !t->fx.empty()) {
+            const auto uid = t->fx.back().uid;
+            const std::pair<const char*, double> ps[] = {{"filters", 4}, {"i1", 4}, {"i2", 7}, {"i3", 11}, {"i4", 16}, {"l2", -3}, {"l3", -6}, {"l4", 3},
+                                                         {"boost", 18}, {"q", 40}, {"steep", 2}, {"excite", 0.4}, {"sat", 0.25}, {"tonic", 1}, {"tonicLevel", -6}};
+            for (const auto& [k, v] : ps) model.apply(document::cmd::setParam(uid, k, v));
+        }
     }
     std::unique_ptr<plugins::JucePluginProvider> provider;
     if (!pluginId.empty() && model.selection().track) {

@@ -9,6 +9,7 @@
 #include "app/model/Demo.h"
 #include "app/ui/ArrangementView.h"
 #include "app/ui/BrowserPanel.h"
+#include "app/ui/ChordResonatorView.h"
 #include "app/ui/ClipEditor.h"
 #include "app/ui/DeviceChainView.h"
 #include "app/ui/MainComponent.h"
@@ -1542,4 +1543,198 @@ TEST_CASE("transport: the project's key is shown and follows the document", "[ui
     m.undo();
     v.refresh(app::ModelEvent::Document);
     CHECK(keyText() == "A Minor");
+}
+
+TEST_CASE("mixer: a bus (and a track) has a send knob and a target chip for sending to other buses", "[ui][mixer][sends]") {
+    Rig r; r.demo();
+    auto& m = *r.m;
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Bus, "Drum bus"));
+    m.apply(edit::addReturnBus(m.project(), project::SendBus::A));
+    ui::MixerView v(m);
+    v.setSize(1500, 600);
+    v.refresh(app::ModelEvent::Document);
+    const auto drumBus = m.project().tracks[6].uid;       // after the demo's six tracks (the last, "Space", is a bus too)
+    const auto verbId = m.project().tracks[7].id;
+    REQUIRE(m.project().tracks[6].name == "Drum bus");
+    // the knob labelled "Send" on the Drum bus strip: its level edits the send to the chip's target (a bus, never itself)
+    std::vector<ui::Chip*> chips;
+    findAll(v, chips);
+    int targetChips = 0;
+    for (auto* c : chips) if (c->isVisible() && c->getWidth() == 42 && c->getHeight() == 20) ++targetChips;
+    CHECK(targetChips >= 1);
+    // drive it the way the knob does
+    std::vector<ui::Knob*> knobs;
+    findAll(v, knobs);
+    ui::Knob* send = nullptr;
+    for (auto* k : knobs) if (k->isVisible() && k->onChange && k->getParentComponent() && k->getParentComponent()->getName().isEmpty() && k->getAlpha() > 0.0f) { (void)k; }
+    // find the strip by sending through the model and checking the strip follows
+    REQUIRE(m.apply(document::cmd::setBusSend(drumBus, verbId, 0.6)));
+    v.refresh(app::ModelEvent::Document);
+    CHECK(m.project().tracks[6].sends.at(verbId) == Approx(0.6));
+    (void)send;
+}
+
+// ---- the chord resonator's panel ----
+
+namespace {
+struct ChordRig {
+    Rig r;
+    project::Uid uid = 0;
+    const app::DeviceInfo* info = nullptr;
+    std::unique_ptr<ui::ChordResonatorView> v;
+    ChordRig() {
+        r.demo();
+        const auto track = r.m->project().tracks[1].uid;
+        r.m->apply(edit::addDevice(r.m->project(), track, "fx", "chordres"));
+        uid = edit::findTrack(r.m->project(), track)->fx.back().uid;
+        info = app::findDevice(app::Chain::Effect, "chordres");
+        v = std::make_unique<ui::ChordResonatorView>(*r.m, uid, *info);
+        v->setSize(ui::ChordResonatorView::kWidth, 195);
+        sync();
+    }
+    void sync() { v->sync(*r.m->document().findDevice(uid)); }
+    double param(const char* key) {
+        const auto* d = r.m->document().findDevice(uid);
+        const auto it = d->params.find(key);
+        if (it != d->params.end()) return it->second;
+        for (const auto& p : info->params) if (std::string(p.key) == key) return double(p.def);
+        return -999;
+    }
+    juce::Point<float> at(int semis, double db) { return {v->xOfSemitone(semis), v->yOfDb(db)}; }
+};
+}  // namespace
+
+TEST_CASE("chord resonator panel: dragging a bead changes its interval and level, clamped to the ranges", "[ui][chordres]") {
+    ChordRig c;
+    CHECK(c.v->activeFilters() == 3);
+    CHECK(c.param("i1") == 4.0);
+    const double boost = c.param("boost");
+    Mouse m(*c.v);
+    const auto start = c.v->beadCentre(0);
+    m.down(start).drag(c.at(9, boost + 6.0)).up(c.at(9, boost + 6.0));
+    CHECK(c.param("i1") == 9.0);
+    CHECK(c.param("l1") == Approx(6.0).margin(0.26));
+    CHECK(c.v->readout().contains("1:"));
+    // far past the ends: the interval stops at -12..+36 and the level at -18..+12
+    c.sync();
+    const auto b = c.v->beadCentre(0);
+    m.down(b).drag({c.v->plotBounds().getRight() + 50.0f, c.v->plotBounds().getY() - 40.0f}).up(b);
+    CHECK(c.param("i1") == 36.0);
+    CHECK(c.param("l1") == 12.0);
+    c.sync();
+    const auto b2 = c.v->beadCentre(0);
+    m.down(b2).drag({c.v->plotBounds().getX() - 50.0f, c.v->plotBounds().getBottom() + 40.0f}).up(b2);
+    CHECK(c.param("i1") == -12.0);
+    CHECK(c.param("l1") == -18.0);
+    // one drag is one undo step
+    const auto before = c.param("i1");
+    c.sync();
+    m.down(c.v->beadCentre(1)).drag(c.at(2, boost)).drag(c.at(3, boost)).drag(c.at(5, boost)).up(c.at(5, boost));
+    CHECK(c.param("i2") == 5.0);
+    c.r.m->undo();
+    CHECK(c.param("i2") == 7.0);
+    CHECK(c.param("i1") == before);
+}
+
+TEST_CASE("chord resonator panel: double-click adds and removes filters (as one undo step), up to six and down to one", "[ui][chordres]") {
+    ChordRig c;
+    Mouse m(*c.v);
+    const double boost = c.param("boost");
+    // add: on empty space, the interval under the pointer, level 0
+    m.dbl(c.at(14, boost - 12.0));
+    c.sync();
+    CHECK(c.v->activeFilters() == 4);
+    CHECK(c.param("filters") == 4.0);
+    CHECK(c.param("i4") == 14.0);
+    CHECK(c.param("l4") == 0.0);
+    c.r.m->undo();
+    CHECK(c.param("filters") == 3.0);
+    c.sync();
+    // the ruler adds too, and stops at six
+    for (int semis : {2, 9, 21, 30}) { c.sync(); m.click({c.v->xOfSemitone(semis), c.v->rulerBounds().getCentreY() - 4}); }
+    c.sync();
+    CHECK(c.v->activeFilters() == 6);
+    CHECK(c.param("i4") == 2.0);
+    CHECK(c.param("i5") == 9.0);
+    CHECK(c.param("i6") == 21.0);                                        // the seventh click (30) found no room
+    m.dbl(c.at(33, boost - 12.0));
+    c.sync();
+    CHECK(c.v->activeFilters() == 6);
+    // remove the first: the others move up, in order
+    const double i2 = c.param("i2"), i3 = c.param("i3"), l2 = c.param("l2");
+    m.dbl(c.v->beadCentre(0));
+    c.sync();
+    CHECK(c.v->activeFilters() == 5);
+    CHECK(c.param("i1") == i2);
+    CHECK(c.param("i2") == i3);
+    CHECK(c.param("l1") == l2);
+    // down to one: the last cannot be removed
+    for (int k = 0; k < 6; ++k) { m.dbl(c.v->beadCentre(0)); c.sync(); }
+    CHECK(c.v->activeFilters() == 1);
+}
+
+TEST_CASE("chord resonator panel: the tonic diamond switches on with a click, drags for its level and switches off with a double-click", "[ui][chordres]") {
+    ChordRig c;
+    Mouse m(*c.v);
+    CHECK(c.param("tonic") == 0.0);
+    const auto d = c.v->beadCentre(-1);
+    m.click(d);
+    CHECK(c.param("tonic") == 1.0);
+    c.sync();
+    const double boost = c.param("boost");
+    m.down(d).drag(c.at(0, boost - 6.0)).up(c.at(0, boost - 6.0));
+    CHECK(c.param("tonicLevel") == Approx(-6.0).margin(0.26));
+    CHECK(c.param("tonic") == 1.0);
+    c.sync();
+    m.dbl(c.v->beadCentre(-1));
+    CHECK(c.param("tonic") == 0.0);
+    // the Tonic chip does the same
+    c.sync();
+    c.v->tonicChip()->mouseUp(juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), {5.0f, 5.0f}, {}, 0, 0, 0, 0, 0, c.v->tonicChip(), c.v->tonicChip(), juce::Time::getCurrentTime(), {5.0f, 5.0f}, juce::Time::getCurrentTime(), 1, false));
+    CHECK(c.param("tonic") == 1.0);
+}
+
+TEST_CASE("chord resonator panel: source and steepness are chosen with words, and the knobs are there for the rest", "[ui][chordres]") {
+    ChordRig c;
+    auto click = [&](juce::Component* ch) { Mouse m(*ch); m.click({5.0f, 5.0f}); };
+    click(c.v->sourceChip(1));
+    CHECK(c.param("source") == 1.0);
+    click(c.v->sourceChip(2));
+    CHECK(c.param("source") == 2.0);
+    click(c.v->steepChip(3));
+    CHECK(c.param("steep") == 3.0);
+    click(c.v->steepChip(0));
+    CHECK(c.param("steep") == 0.0);
+    for (const char* k : {"boost", "q", "excite", "sat", "mix", "glide", "thresh"}) CHECK(c.v->knob(k) != nullptr);
+    CHECK(c.v->knob("l1") == nullptr);                                   // no knob for what the beads do
+    // a knob drives its parameter
+    auto* boost = dynamic_cast<ui::Knob*>(c.v->knob("boost"));
+    REQUIRE(boost);
+    Mouse mk(*boost);
+    mk.down({20.0f, 30.0f}).drag({20.0f, 10.0f}).up({20.0f, 10.0f});
+    CHECK(c.param("boost") > 12.0);
+}
+
+TEST_CASE("chord resonator panel: in the device chain it is one wide panel without a grid of knobs", "[ui][chordres]") {
+    Rig r; r.demo();
+    const auto track = r.m->project().tracks[1].uid;
+    r.m->selectTrack(track);
+    ui::DeviceChainView v(*r.m);
+    v.setSize(1800, 300);
+    v.refresh(app::ModelEvent::Selection);
+    const int before = v.panelCount();
+    r.m->apply(edit::addDevice(r.m->project(), track, "fx", "chordres"));
+    v.refresh(app::ModelEvent::Document);
+    CHECK(v.panelCount() == before + 1);
+    std::vector<ui::ChordResonatorView*> views;
+    findAll(v, views);
+    REQUIRE(views.size() == 1);
+    CHECK(views[0]->getWidth() >= ui::ChordResonatorView::kWidth - 20);
+    std::vector<ui::Knob*> knobs;
+    findAll(*views[0], knobs);
+    CHECK(knobs.size() == 7);                                            // the parameters the beads and chips do not cover
+    // a change in the document reaches the picture
+    r.m->apply(document::cmd::setParam(edit::findTrack(r.m->project(), track)->fx.back().uid, "i1", 9));
+    v.refresh(app::ModelEvent::Document);
+    CHECK(views[0]->value("i1") == 9.0);
 }

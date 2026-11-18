@@ -61,7 +61,15 @@ public:
         if (track < -1 || track >= kMaxMeterTracks || fx < 0 || fx >= kMaxFxMeters || band < 0 || band >= kMaxBands) return 0.0f;
         return load(fxGr_[idx(track, fx, band)]);
     }
-    void clearFx() noexcept { for (auto& a : fxGr_) store(a, 0.0f); }   // after a graph swap: the old effects are gone
+    void setFxInfo(int track, int fx, float v) noexcept {
+        if (track < -1 || track >= kMaxMeterTracks || fx < 0 || fx >= kMaxFxMeters) return;
+        store(fxInfo_[size_t(track + 1) * kMaxFxMeters + size_t(fx)], v + 1.0f);   // stored +1: the zero-initialised slot reads -1 (none)
+    }
+    float fxInfo(int track, int fx) const noexcept {
+        if (track < -1 || track >= kMaxMeterTracks || fx < 0 || fx >= kMaxFxMeters) return -1.0f;
+        return load(fxInfo_[size_t(track + 1) * kMaxFxMeters + size_t(fx)]) - 1.0f;
+    }
+    void clearFx() noexcept { for (auto& a : fxGr_) store(a, 0.0f); for (auto& a : fxInfo_) store(a, 0.0f); }   // after a graph swap: the old effects are gone
     void setTrackScene(int i, int scene, double anchorTicks) noexcept {
         if (i < 0 || i >= kMaxMeterTracks) return;
         trackScene_[size_t(i)].store(scene, std::memory_order_relaxed);
@@ -96,6 +104,7 @@ private:
     static float load(const std::atomic<std::uint32_t>& a) noexcept { std::uint32_t b = a.load(std::memory_order_relaxed); float v; std::memcpy(&v, &b, 4); return v; }
     static size_t idx(int track, int fx, int band) noexcept { return (size_t(track + 1) * kMaxFxMeters + size_t(fx)) * kMaxBands + size_t(band); }
     std::array<std::atomic<std::uint32_t>, size_t(kMaxMeterTracks + 1) * kMaxFxMeters * kMaxBands> fxGr_{};
+    std::array<std::atomic<std::uint32_t>, size_t(kMaxMeterTracks + 1) * kMaxFxMeters> fxInfo_{};
     std::array<std::atomic<std::uint32_t>, kMaxMeterTracks> trackPeak_{}, trackRms_{};
     std::array<std::atomic<int>, kMaxMeterTracks> trackScene_{};
     std::array<std::atomic<std::uint64_t>, kMaxMeterTracks> trackAnchor_{};

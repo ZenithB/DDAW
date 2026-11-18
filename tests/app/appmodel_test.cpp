@@ -2,6 +2,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <set>
 
 #include "app/model/AppModel.h"
 #include "app/model/Catalog.h"
@@ -874,4 +875,102 @@ TEST_CASE("model: a dynamics device's gain reduction is read from the engine by 
     const auto mc = m.project().masterFx[0].uid;
     bank.setFxGr(-1, 0, 0, -7.0f);
     CHECK(m.reductionDb(mc) == -7.0f);
+}
+
+TEST_CASE("model: sends to buses (from tracks and buses) are edited as commands, with the rules that keep them valid", "[appmodel][sends]") {
+    Rig r;
+    auto& m = *r.m;
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth, "Src"));
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Bus, "Drums"));
+    m.apply(edit::addTrack(m.project(), project::TrackKind::Bus, "Verb"));
+    const auto& p = m.project();
+    const auto src = p.tracks[0].uid, drums = p.tracks[1].uid, verb = p.tracks[2].uid;
+    const auto drumsId = p.tracks[1].id, verbId = p.tracks[2].id;
+    // targets: every bus but itself; a track sees both buses, a bus sees the other one
+    CHECK(edit::sendTargets(p, src).size() == 2);
+    CHECK(edit::sendTargets(p, drums).size() == 1);
+    // a bus sends to a bus
+    REQUIRE(m.apply(document::cmd::setBusSend(drums, verbId, 0.4)));
+    CHECK(m.project().tracks[1].sends.at(verbId) == Approx(0.4));
+    // moving an existing send is a live parameter change: no rebuild (the change report has a param edit, not a structural one)
+    const auto before = m.service().publishedEpoch();
+    REQUIRE(m.apply(document::cmd::setBusSend(drums, verbId, 0.7)));
+    CHECK(m.project().tracks[1].sends.at(verbId) == Approx(0.7));
+    (void)before;
+    // the way back is refused: Verb -> Drums would close a loop (and Drums no longer offers Verb... nor Verb Drums)
+    CHECK_FALSE(m.apply(document::cmd::setBusSend(verb, drumsId, 0.5)));
+    CHECK(m.lastError().find("loop") != std::string::npos);
+    CHECK(edit::sendTargets(m.project(), verb).empty());
+    // itself, a track and an unknown target are refused
+    CHECK_FALSE(m.apply(document::cmd::setBusSend(drums, drumsId, 0.5)));
+    CHECK_FALSE(m.apply(document::cmd::setBusSend(drums, m.project().tracks[0].id, 0.5)));
+    CHECK_FALSE(m.apply(document::cmd::setBusSend(drums, "nosuch", 0.5)));
+    // a track can send to both, level 0 removes the send, undo restores each step
+    REQUIRE(m.apply(document::cmd::setBusSend(src, drumsId, 0.3)));
+    REQUIRE(m.apply(document::cmd::setBusSend(src, verbId, 0.2)));
+    CHECK(m.project().tracks[0].sends.size() == 2);
+    REQUIRE(m.apply(document::cmd::setBusSend(src, drumsId, 0.0)));
+    CHECK(m.project().tracks[0].sends.count(drumsId) == 0);
+    m.undo();
+    CHECK(m.project().tracks[0].sends.at(drumsId) == Approx(0.3));
+    m.undo();
+    m.undo();
+    CHECK(m.project().tracks[0].sends.empty());
+    // an indirect loop through an output route is refused too: Src -> bus Drums; set Drums' output to Verb; then Verb -> Drums is a loop
+    REQUIRE(m.apply(document::cmd::setTrack(drums, "output", verbId)));
+    CHECK_FALSE(m.apply(document::cmd::setBusSend(verb, drumsId, 0.5)));
+}
+
+TEST_CASE("catalog: stepped parameters show words, not numbers (and a new stepped parameter must say which)", "[appmodel][names]") {
+    // parameters that are genuinely numbers: counts, orders, bit depths, semitone intervals, a frequency in steps
+    const std::set<std::string> numeric = {"crush.bits", "cheby.order", "phaser.octaves", "modal.modes", "wavetable.unison", "perc.clap", "arp.oct",
+                                           "chord.i1", "chord.i2", "chord.i3", "chorus.rateHi", "phaser.rateHi", "autofilt.rateHi", "trem.rateHi",
+                                           "autopan.rateHi", "vib.rateHi", "follow.octave", "ddsp.transpose", "chordres.filters"};
+    std::set<std::string> named;
+    for (const auto& d : deviceCatalog()) {
+        for (const auto& p : d.params) {
+            const std::string id = d.type + "." + p.key;
+            if (p.nNames > 0) {
+                named.insert(id);
+                INFO(id);
+                CHECK(int(p.nNames) == int(std::lround(p.max)) - int(std::lround(p.min)) + 1);       // one name per value: no off-by-one
+                for (int i = 0; i < p.nNames; ++i) { REQUIRE(p.names[i] != nullptr); CHECK(std::string(p.names[i]).size() > 0); CHECK(std::string(p.names[i]).size() <= 10); }
+            } else if (p.curve == Curve::Stepped) {
+                INFO(id << " is stepped but has no names, and is not on the list of true numbers");
+                CHECK(numeric.count(id) == 1);
+            }
+        }
+    }
+    for (const char* id : {"poly.wave", "poly.slope", "poly.lfoShape", "mono.wave", "subtractive.wave1", "subtractive.wave2", "waveshaper.shape", "waveshaper.src",
+                           "wavetable.bank", "fmop.algo", "modal.model", "modal.exciter", "perc.noiseMode", "filter.ftype", "filter.slope", "delay.time", "pingpong.time",
+                           "duck.rate", "follow.wave", "chorus.rateMode", "chorus.rateSync", "opto.mode", "mbcomp.mode", "gate.key", "gate.det", "gate.listen", "gate.inverse",
+                           "autotune.mode", "autotune.root", "autotune.scale", "arp.rate", "arp.mode", "arp.pat", "ksampler.root"})
+        CHECK(named.count(id) == 1);
+    // the words, as the knobs show them
+    auto spec = [&](const char* type, const char* key) {
+        for (const auto& d : deviceCatalog()) if (d.type == type) for (const auto& p : d.params) if (std::string(p.key) == key) return p;
+        FAIL("no " << type << "." << key);
+        return ParamSpec{};
+    };
+    CHECK(formatParam(spec("poly", "wave"), 0) == "Saw");
+    CHECK(formatParam(spec("poly", "wave"), 3) == "Sine");
+    CHECK(formatParam(spec("poly", "wave"), 6) == "Fat tri");
+    CHECK(formatParam(spec("subtractive", "wave1"), 1) == "Pulse");
+    CHECK(formatParam(spec("filter", "ftype"), 2) == "Band-pass");
+    CHECK(formatParam(spec("delay", "time"), 3) == "1/8 dot");
+    CHECK(formatParam(spec("chorus", "rateSync"), 5) == "1/4");
+    CHECK(formatParam(spec("gate", "key"), 4) == "Side");
+    CHECK(formatParam(spec("opto", "mode"), 1) == "Limit");
+    CHECK(formatParam(spec("mbcomp", "mode"), 1) == "Expand");
+    CHECK(formatParam(spec("ksampler", "root"), 9) == "A");
+    CHECK(formatParam(spec("autotune", "root"), -1) == "Project");
+    CHECK(formatParam(spec("autotune", "scale"), 1) == "Minor");
+    CHECK(formatParam(spec("autotune", "scale"), -1) == "Project");
+    CHECK(formatParam(spec("arp", "pat"), 2) == "Scale");
+    CHECK(formatParam(spec("crush", "bits"), 8) == "8");                 // a true number stays one
+    // an out-of-range value falls back to the number rather than faulting
+    CHECK(formatParam(spec("poly", "wave"), 99) == "99");
+    // the engine's own tables are untouched: the device still reports numbers only
+    auto d = createInstrument("poly");
+    for (const auto& p : d->params()) CHECK(p.nNames == 0);
 }

@@ -19,6 +19,11 @@ struct ParamSpec {
     Curve       curve;
     float       smoothingMs;  // control-rate smoothing; 0 for stepped params
     bool        audioRate;    // true: accepts a per-sample modulation buffer
+    // Display names for a stepped parameter's values, `names[i]` for the value min + i (a wave's "Saw", "Square"...). The static
+    // tables leave this empty; the app's catalog fills it in a copy it hands to the UI (app/model/Catalog.cpp), so nothing the
+    // engine or the saved project sees changes: the value stays a number.
+    const char* const* names = nullptr;
+    uint8_t     nNames = 0;
 };
 
 struct ProcessContext {
@@ -73,6 +78,15 @@ public:
     virtual void  trigger() noexcept {}
     // The project routed a source track to this device (duck's `srcTrack`): switch to sidechain mode.
     virtual void  setSidechain(bool) noexcept {}
+    // Effects that follow the notes of their track's instrument (the chord resonator's tonic) say so, and are told every note the
+    // instrument is: audio thread, at the block boundary the note starts on. Everything else ignores them.
+    virtual bool  wantsNotes() const noexcept { return false; }
+    virtual void  noteOn(uint8_t /*pitch*/, float /*velocity*/, uint32_t /*noteId*/) {}
+    virtual void  noteOff(uint32_t /*noteId*/) {}
+    // A value the device shows in its panel (the tonic it is following, as a MIDI note with a fraction; -1: none), published once per
+    // block like the reduction meters. hasInfo() says whether it has one.
+    virtual bool  hasInfo() const noexcept { return false; }
+    virtual float info() const noexcept { return -1.0f; }
     // True for dynamics processors that can run their detector on a key signal (ModInputs::keyL/keyR).
     virtual bool  keyable() const noexcept { return false; }
     // Control path (builder thread, before prepare): the project's key - root pitch class 0..11 (9 = A) and scale index (dsp/Scales.h) -

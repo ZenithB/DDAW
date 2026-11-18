@@ -363,7 +363,10 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
             auto& f = t.fx[fi];
             f.dev->process(tl, tr, n, ctx, inputsFor(f, n));
             applyGain(tl, tr, n, advance(f.out, n));
-            if (meters && fi < size_t(kMaxFxMeters) && f.dev->hasReductionMeter()) publishReduction(*meters, i, int(fi), *f.dev);
+            if (meters && fi < size_t(kMaxFxMeters)) {
+                if (f.dev->hasReductionMeter()) publishReduction(*meters, i, int(fi), *f.dev);
+                if (f.dev->hasInfo()) meters->setFxInfo(i, int(fi), f.dev->info());
+            }
         }
 #ifdef DDAW_GRAPH_PROFILE
         { const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - pf0).count()); profFxNs[i & 127] += ns; profFxMax[i & 127] = std::max(profFxMax[i & 127], ns); }
@@ -521,12 +524,14 @@ void Graph::setParam(const ParamAddr& a, float value) noexcept {
 void Graph::noteOn(uint16_t track, uint8_t pitch, float vel, uint32_t noteId) noexcept {
     if (track >= tracks_.size() || !tracks_[track].inst) return;
     tracks_[track].inst->noteOn(pitch, vel, noteId);
+    for (auto& f : tracks_[track].fx) if (f.dev->wantsNotes()) f.dev->noteOn(pitch, vel, noteId);   // effects that follow the notes
     if (nActive_ < kMaxActive) active_[nActive_++] = {track, noteId, pitch, vel};
 }
 
 void Graph::noteOff(uint16_t track, uint32_t noteId) noexcept {
     if (track >= tracks_.size() || !tracks_[track].inst) return;
     tracks_[track].inst->noteOff(noteId);
+    for (auto& f : tracks_[track].fx) if (f.dev->wantsNotes()) f.dev->noteOff(noteId);
     for (size_t i = 0; i < nActive_; ++i)
         if (active_[i].track == track && active_[i].noteId == noteId) { active_[i] = active_[--nActive_]; break; }
 }
@@ -568,7 +573,10 @@ void Graph::allNotesOff() noexcept {
     nPlayers_ = 0;
     while (nActive_ > 0) {
         const Active a = active_[--nActive_];
-        if (a.track < tracks_.size() && tracks_[a.track].inst) tracks_[a.track].inst->noteOff(a.noteId);
+        if (a.track < tracks_.size() && tracks_[a.track].inst) {
+            tracks_[a.track].inst->noteOff(a.noteId);
+            for (auto& f : tracks_[a.track].fx) if (f.dev->wantsNotes()) f.dev->noteOff(a.noteId);
+        }
     }
     nGates_ = 0;
 }

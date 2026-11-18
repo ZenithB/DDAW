@@ -12,12 +12,16 @@ const ParamSpec kSendSpec{0, "send", 0.0f, 1.0f, 0.0f, Curve::Linear, 0, false};
 class MixerView::Strip : public juce::Component {
 public:
     Strip(app::AppModel& m, project::Uid uid, size_t index, bool isMaster)
-        : model_(m), uid_(uid), index_(index), master_(isMaster), pan_(kPanSpec, "Pan"), sendA_(kSendSpec, "A"), sendB_(kSendSpec, "B"),
+        : model_(m), uid_(uid), index_(index), master_(isMaster), pan_(kPanSpec, "Pan"), sendA_(kSendSpec, "A"), sendB_(kSendSpec, "B"), busSend_(kSendSpec, "Send"), target_("-"),
           mute_("M", col::queued), solo_("S", col::accent), arm_("R", col::rec), mon_("IN", col::meterMid) {
         addAndMakeVisible(fader_);
         fader_.setColour(master_ ? col::accent : trackColour(index));   // (a return's strip is recoloured when it learns its role, in sync())
         if (!master_) {
-            for (juce::Component* c : std::initializer_list<juce::Component*>{&pan_, &sendA_, &sendB_, &mute_, &solo_, &arm_, &mon_}) addAndMakeVisible(c);
+            for (juce::Component* c : std::initializer_list<juce::Component*>{&pan_, &sendA_, &sendB_, &busSend_, &target_, &mute_, &solo_, &arm_, &mon_}) addAndMakeVisible(c);
+            busSend_.onBegin = [this] { model_.beginGesture("bus send"); };
+            busSend_.onChange = [this](double v) { if (!targetId_.empty()) model_.apply(document::cmd::setBusSend(uid_, targetId_, v)); };
+            busSend_.onEnd = [this] { model_.endGesture(); };
+            target_.onClick = [this] { pickTarget(); };
             mon_.setToggleable(true);
             mon_.onToggle = [this](bool on) { model_.setMonitor(uid_, on); };
             arm_.setToggleable(true);
@@ -56,8 +60,9 @@ public:
         solo_.setOn(t->solo);
         audio_ = t->kind == project::TrackKind::Audio;
         const bool bus = t->kind == project::TrackKind::Bus;
-        sendA_.setVisible(!bus);                 // a bus has no sends of its own
+        sendA_.setVisible(!bus);                 // a bus has no A/B sends of its own (it has per-bus sends, below)
         sendB_.setVisible(!bus);
+        syncBusSend(*t);
         sendA_.setAlpha(app::edit::hasReturn(p, project::SendBus::A) ? 1.0f : 0.35f);     // a send with no return behind it does nothing
         sendB_.setAlpha(app::edit::hasReturn(p, project::SendBus::B) ? 1.0f : 0.35f);
         armable_ = t->kind != project::TrackKind::Bus;
@@ -76,9 +81,17 @@ public:
         auto r = getLocalBounds().reduced(4, 0);
         r.removeFromTop(34);  // name
         if (!master_) {
-            auto knobs = r.removeFromTop(48);
-            sendA_.setBounds(knobs.removeFromLeft(40));
-            sendB_.setBounds(knobs.removeFromLeft(40));
+            auto placeBusSend = [&](juce::Rectangle<int> row) {   // the target chip and its level knob, side by side
+                target_.setBounds(row.removeFromLeft(44).withSizeKeepingCentre(42, 20));
+                busSend_.setBounds(row.removeFromLeft(40));
+            };
+            if (bus_) placeBusSend(r.removeFromTop(48));          // a bus has no A/B sends: its row is the per-bus send
+            else {
+                auto knobs = r.removeFromTop(48);
+                sendA_.setBounds(knobs.removeFromLeft(40));
+                sendB_.setBounds(knobs.removeFromLeft(40));
+                placeBusSend(r.removeFromTop(48));
+            }
             auto pan = r.removeFromTop(56);
             pan_.setBounds(pan.withSizeKeepingCentre(52, 56));
             auto ms = r.removeFromTop(26);
@@ -124,7 +137,7 @@ public:
         if (master_) return;
         if (e.mods.isPopupMenu() || e.y > 24) { if (!e.mods.isPopupMenu()) model_.selectTrack(uid_); }
         else model_.selectTrack(uid_);
-        if (e.mods.isPopupMenu()) routeMenu();
+        if (e.mods.isPopupMenu() && bus_) routeMenu();   // only a bus has an output route (a track feeds the master and reaches buses by sends)
     }
     void mouseDoubleClick(const juce::MouseEvent& e) override {
         if (master_ || e.y > 24) return;
@@ -132,6 +145,45 @@ public:
     }
 
 private:
+    // The per-bus send: a chip names the bus being edited (a menu picks another), the knob is the level of the send to it.
+    void syncBusSend(const project::Track& t) {
+        bus_ = t.kind == project::TrackKind::Bus;
+        const auto targets = app::edit::sendTargets(model_.project(), uid_);
+        const bool any = !targets.empty();
+        busSend_.setVisible(any);
+        target_.setVisible(any);
+        if (bus_ != laidOutBus_) { laidOutBus_ = bus_; resized(); }
+        if (!any) { targetId_.clear(); return; }
+        auto has = [&](const std::string& id) { for (auto* x : targets) if (x->id == id) return true; return false; };
+        if (targetId_.empty() || !has(targetId_)) {   // the bus being edited: keep the user's choice, else the first one in use, else the first
+            targetId_ = targets.front()->id;
+            for (auto* x : targets) if (t.sends.count(x->id)) { targetId_ = x->id; break; }
+        }
+        const auto* cur = app::edit::findTrackById(model_.project(), targetId_);
+        const auto it = t.sends.find(targetId_);
+        busSend_.setValue(it == t.sends.end() ? 0.0 : it->second);
+        int active = 0;
+        for (auto& [bus, level] : t.sends) { (void)bus; if (level > 0.0) ++active; }
+        juce::String name = cur ? juce::String(cur->name) : juce::String("?");
+        target_.setText((name.length() > 6 ? name.substring(0, 6) : name) + (active > 1 ? juce::String(" +") + juce::String(active - 1) : juce::String()));
+    }
+    void pickTarget() {
+        const auto* t = app::edit::findTrack(model_.project(), uid_);
+        if (!t) return;
+        juce::PopupMenu m;
+        m.addSectionHeader("Send to");
+        auto ids = std::make_shared<std::vector<std::string>>();
+        int id = 1;
+        for (auto* x : app::edit::sendTargets(model_.project(), uid_)) {
+            const auto it = t->sends.find(x->id);
+            const double level = it == t->sends.end() ? 0.0 : it->second;
+            m.addItem(id++, juce::String(x->name) + (level > 0.0 ? "   " + juce::String(level, 2) : juce::String()), true, x->id == targetId_);
+            ids->push_back(x->id);
+        }
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&target_), [this, ids](int r) {
+            if (r >= 1 && size_t(r - 1) < ids->size()) { targetId_ = (*ids)[size_t(r - 1)]; sync(); }
+        });
+    }
     void routeMenu() {
         const auto& p = model_.project();
         juce::PopupMenu m;
@@ -157,8 +209,10 @@ private:
     char retLetter_ = 'A';
     std::string name_, out_, kind_;
     Fader fader_;
-    Knob pan_, sendA_, sendB_;
-    Chip mute_, solo_, arm_, mon_;
+    Knob pan_, sendA_, sendB_, busSend_;
+    Chip target_, mute_, solo_, arm_, mon_;
+    std::string targetId_;           // the bus the per-bus send knob edits
+    bool bus_ = false, laidOutBus_ = false;
 };
 
 // A built-in return channel of an imported project (project.returns: sends A and B when there are no send buses): its name, its

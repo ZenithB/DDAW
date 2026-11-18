@@ -3,6 +3,7 @@
 // the native DDAW format (A4) will extend it. Audio clips, follow actions and sample references are
 // not modelled yet (A4).
 #include <cstdint>
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <string>
@@ -211,5 +212,24 @@ struct Fixture {
     Scope scope;
     Project project;
 };
+
+// Do the signal paths (a track's output bus and its per-bus sends) lead from `from` to `to` (track ids)? Used to refuse a send that
+// would close a loop: sending A to B is only allowed when B cannot already reach A.
+inline bool busReaches(const Project& p, const std::string& from, const std::string& to) {
+    std::vector<std::string> stack{from}, seen;
+    while (!stack.empty()) {
+        const std::string u = stack.back();
+        stack.pop_back();
+        if (u == to) return true;
+        if (std::find(seen.begin(), seen.end(), u) != seen.end()) continue;
+        seen.push_back(u);
+        for (const auto& t : p.tracks) {
+            if (t.id != u) continue;
+            if (!t.output.empty() && t.output != "master") stack.push_back(t.output);
+            for (const auto& [bus, level] : t.sends) { (void)level; stack.push_back(bus); }
+        }
+    }
+    return false;
+}
 
 }  // namespace ddaw::project

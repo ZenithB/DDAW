@@ -176,6 +176,8 @@ public:
     // Gain reduction (dB <= 0) of a dynamics device as the engine last published it; `band` 0..2 (the multiband compressor's low,
     // mid and high; the others have band 0). 0 for a device that is not metered or not built yet.
     float reductionDb(project::Uid deviceUid, int band = 0) const;
+    // The value a device publishes for its panel (see EffectDevice::info; -1 when it has none or is not built).
+    float deviceValue(project::Uid deviceUid) const;
 
     // ---- hosted plugins (L1) ----
     // The host lives with the UI; the model asks it for the live instance behind each "plugin" device. Every edit, undo, redo and

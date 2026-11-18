@@ -401,3 +401,7 @@ Done: a source-track sidechain, optional on every dynamics device (`comp`, `opto
 ### Mixer and engine follow-ups (2026-10-07)
 
 Done: return strips in the mixer (a returns group, "+ Return", built-in returns of imported projects), autotune key and scale (project key with an editor in the transport bar, plus per-device overrides), gain-reduction meters for every dynamics device and per band for the multiband compressor, and delay compensation of sends (per-route, ARCH 10). Remaining engine gap: `dest "midi"` modulation.
+
+### Bus sends, value names and the chord resonator (2026-11-18)
+
+Done: bus-to-bus and track-to-bus sends with a send knob and a target chip in the mixer (ARCH 25); words instead of numbers for stepped parameters across the catalog (ARCH 25); the chord resonator (ARCH 26): a smart resonant effect that reads the played note (or the audio, by FFT) and rings up to six steep filters at equal-tempered intervals above it, with a built-in exciter, boost-driven compression and headroom, a final saturation stage and a graphic panel of draggable beads. Not verified: the chord resonator has no listening test (its tests are analytic: placement, steepness, bandwidth, headroom, bit-exact bypass, block-size invariance, no allocation), and the audio-source tracker has only been tried on synthetic harmonic tones.

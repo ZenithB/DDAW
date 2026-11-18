@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "core/Cmd.h"
 #include "project/ProjectJson.h"
 
 namespace ddaw::document {
@@ -244,6 +245,28 @@ Document::Exec Document::execute(const Command& c) {
         else if (f == "sendA") ex.info.params.push_back({t.id + "|mix|sendA", t.sendA});
         else if (f == "sendB") ex.info.params.push_back({t.id + "|mix|sendB", t.sendB});
         else if (f != "name") ex.info = structuralChange();
+    } else if (k == "track.send") {
+        // a track's (or bus's) send level to a bus: >0 sets it, 0 removes it
+        Track& t = p_.tracks[trackIdx(uidArg(a, "uid"))];
+        const std::string bus = need(a, "bus").get<std::string>();
+        const json& v = need(a, "level");
+        if (!v.is_number()) bad("track.send needs a numeric level");
+        const double level = std::max(v.get<double>(), 0.0);
+        const auto it = t.sends.find(bus);
+        const bool had = it != t.sends.end();
+        const json old = had ? json(it->second) : json(nullptr);
+        if (level > 0.0 && !had) {   // a new send: the target must be another bus, no loop, and room for it
+            const auto tgt = std::find_if(p_.tracks.begin(), p_.tracks.end(), [&](const Track& x) { return x.id == bus; });
+            if (tgt == p_.tracks.end() || tgt->kind != TrackKind::Bus) bad("a send needs a bus to send to");
+            if (bus == t.id) bad("a bus cannot send to itself");
+            if (busReaches(p_, bus, t.id)) bad("that send would close a loop");
+            if (t.sends.size() >= kMaxBusSends) bad("too many sends on one track");
+        }
+        if (level > 0.0) t.sends[bus] = level; else t.sends.erase(bus);
+        ex.forward.args["level"] = level;
+        ex.inverse = {"track.send", {{"uid", t.uid}, {"bus", bus}, {"level", old.is_null() ? 0.0 : old.get<double>()}}};
+        if (had && level > 0.0) ex.info.params.push_back({t.id + "|send|" + bus, level});   // an existing send moves live
+        else ex.info = structuralChange();                                                    // a send appearing or going away rebuilds
     } else if (k == "track.move") {
         const size_t from = trackIdx(uidArg(a, "uid"));
         const size_t to = indexArg(a, "index", p_.tracks.size(), false);
@@ -610,6 +633,7 @@ const std::string& Document::undoLabel() const {
 
 namespace cmd {
 Command setParam(Uid deviceUid, const std::string& key, double value) { return {"device.param", {{"uid", deviceUid}, {"key", key}, {"value", value}}}; }
+Command setBusSend(project::Uid trackUid, const std::string& busId, double level) { return {"track.send", {{"uid", trackUid}, {"bus", busId}, {"level", level}}}; }
 Command setTrack(Uid trackUid, const std::string& field, json value) { return {"track.set", {{"uid", trackUid}, {"field", field}, {"value", std::move(value)}}}; }
 Command setMeta(const std::string& field, json value) { return {"meta.set", {{"field", field}, {"value", std::move(value)}}}; }
 }  // namespace cmd

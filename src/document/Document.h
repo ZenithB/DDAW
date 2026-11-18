@@ -122,6 +122,8 @@ namespace cmd {
 Command setParam(project::Uid deviceUid, const std::string& key, double value);
 Command setTrack(project::Uid trackUid, const std::string& field, nlohmann::json value);
 Command setMeta(const std::string& field, nlohmann::json value);
+// A track's or bus's send to a bus (level 0 removes it). Refused for a non-bus target, itself, or a send that would close a loop.
+Command setBusSend(project::Uid trackUid, const std::string& busId, double level);
 }  // namespace cmd
 
 }  // namespace ddaw::document
