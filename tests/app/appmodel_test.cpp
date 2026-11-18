@@ -1,6 +1,8 @@
 // The UI's model layer: catalog, command builders and the shared AppModel, headless (no JUCE).
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+#include "EmptyModel.h"
 #include <filesystem>
 #include <set>
 
@@ -18,7 +20,7 @@ namespace {
 struct Rig {
     engine::Engine eng;
     std::unique_ptr<AppModel> m;
-    Rig() { eng.prepare(48000.0); m = std::make_unique<AppModel>(eng, 48000.0); }
+    Rig() { eng.prepare(48000.0); m = std::make_unique<AppModel>(eng, 48000.0); startEmpty(*m); }
 };
 }  // namespace
 
@@ -164,7 +166,7 @@ TEST_CASE("model: save, new and reopen a package", "[appmodel]") {
     m.apply(edit::addScene(m.project()));
     CHECK(m.dirty());
     m.newProject();
-    CHECK(m.project().tracks.empty());
+    CHECK(m.project().tracks.size() == 2);                         // a new session: Send A and Send B
     REQUIRE(m.open(dir, err));
     CHECK(m.project().tracks.size() == 1);
     CHECK(m.project().scenes.size() == 1);
@@ -210,6 +212,7 @@ TEST_CASE("model: the demo song plays through a live engine and edits land while
     engine::Engine eng;
     eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
+    startEmpty(m);
     std::atomic<bool> run{true};
     std::thread audio([&] {   // a stand-in audio callback: 64-frame blocks, slightly faster than real time
         std::vector<float> l(64), r(64);
@@ -292,6 +295,7 @@ TEST_CASE("recording: a take lands on the armed audio track exactly where it was
         engine::Engine eng;
         eng.prepare(48000.0);
         AppModel m(eng, 48000.0);
+        startEmpty(m);
         test::FakeDevice dev(eng, 4800, 64);
         RecordingEnv env;
         env.inputLatencyFrames = [] { return 1200; };
@@ -366,6 +370,7 @@ TEST_CASE("recording: a take lands on the armed audio track exactly where it was
 TEST_CASE("export plan: ranges, stems per source track, and safe file names", "[appmodel][export]") {
     engine::Engine eng; eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
+    startEmpty(m);
     buildDemo(m);
     std::string err;
     ExportOptions o;
@@ -407,6 +412,7 @@ TEST_CASE("export plan: ranges, stems per source track, and safe file names", "[
 TEST_CASE("export plan: the stems sum back to the mix", "[appmodel][export]") {
     engine::Engine eng; eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
+    startEmpty(m);
     buildDemo(m);
     // the mix without its master chain, for comparison with the stems (which have none)
     std::string err;
@@ -434,6 +440,7 @@ TEST_CASE("export plan: the stems sum back to the mix", "[appmodel][export]") {
 TEST_CASE("export: a render can be cancelled part-way", "[appmodel][export]") {
     engine::Engine eng; eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
+    startEmpty(m);
     buildDemo(m);
     std::string err;
     auto jobs = planExport(m.project(), ExportOptions{}, err);
@@ -545,6 +552,7 @@ TEST_CASE("recording: a sung glide is written into an automation lane that lines
     engine::Engine eng;
     eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
+    startEmpty(m);
     std::string err;
     REQUIRE(m.open(file, err));
     fs::remove(file);
@@ -605,6 +613,7 @@ TEST_CASE("recording: a chord and a held note played live become a clip, in time
     engine::Engine eng;
     eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
+    startEmpty(m);
     m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
     m.apply(edit::addTrack(m.project(), project::TrackKind::Drum));
     const auto synth = m.project().tracks[0].uid;
@@ -671,6 +680,7 @@ TEST_CASE("recording: a note's expression (bend, pressure) is recorded as curves
     engine::Engine eng;
     eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
+    startEmpty(m);
     m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
     const auto synth = m.project().tracks[0].uid;
     project::DeviceSpec fmop; fmop.type = "fmop";
@@ -733,6 +743,7 @@ TEST_CASE("recording: the live target follows arming and selection; notes withou
     engine::Engine eng;
     eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
+    startEmpty(m);
     m.apply(edit::addTrack(m.project(), project::TrackKind::Audio));
     m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
     m.apply(edit::addTrack(m.project(), project::TrackKind::Drum));
@@ -756,6 +767,7 @@ TEST_CASE("polyphonic audio input: the model switches it on and off, and recordi
     engine::Engine eng;
     eng.prepare(48000.0);
     AppModel m(eng, 48000.0);
+    startEmpty(m);
     CHECK_FALSE(m.polyInput());
     CHECK_FALSE(eng.polyInputEnabled());
     m.setPolyInput(true);

@@ -31,6 +31,12 @@ inline float advance(dsp::Smoother& s, int n) noexcept {
     return s.current();
 }
 
+inline float peakOf(const float* l, const float* r, int n) noexcept {
+    float p = 0.0f;
+    for (int i = 0; i < n; ++i) p = std::max({p, std::abs(l[i]), std::abs(r[i])});
+    return p;
+}
+
 inline void applyGain(float* l, float* r, int n, float g) noexcept {
     if (g == 1.0f) return;
     for (int k = 0; k < n; ++k) { l[k] *= g; r[k] *= g; }
@@ -69,6 +75,8 @@ FxSlot& Graph::addMasterFx() {
     masterFx_.emplace_back();
     masterFx_.back().out.prepare(sr_, 15.0f);
     masterFx_.back().out.snap(1.0f);
+    masterFx_.back().in.prepare(sr_, 15.0f);
+    masterFx_.back().in.snap(1.0f);
     return masterFx_.back();
 }
 
@@ -365,9 +373,14 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
 #endif
         for (size_t fi = 0; fi < t.fx.size(); ++fi) {
             auto& f = t.fx[fi];
+            applyGain(tl, tr, n, advance(f.in, n));                                 // the input trim, then what the device sees is metered
+            float inPk = 0.0f, outPk = 0.0f;
+            if (meters && fi < size_t(kMaxFxMeters)) inPk = peakOf(tl, tr, n);
             f.dev->process(tl, tr, n, ctx, inputsFor(f, n));
             applyGain(tl, tr, n, advance(f.out, n));
             if (meters && fi < size_t(kMaxFxMeters)) {
+                outPk = peakOf(tl, tr, n);
+                meters->setFxIo(i, int(fi), inPk, outPk, meterDecay);
                 if (f.dev->hasReductionMeter()) publishReduction(*meters, i, int(fi), *f.dev);
                 if (f.dev->hasInfo()) meters->setFxInfo(i, int(fi), f.dev->info());
             }
@@ -457,9 +470,15 @@ void Graph::process(float* outL, float* outR, int n, const ProcessContext& ctx, 
     }
     for (size_t fi = 0; fi < masterFx_.size(); ++fi) {
         auto& f = masterFx_[fi];
+        applyGain(mixL_.data(), mixR_.data(), n, advance(f.in, n));
+        const float inPk = meters && fi < size_t(kMaxFxMeters) ? peakOf(mixL_.data(), mixR_.data(), n) : 0.0f;
         f.dev->process(mixL_.data(), mixR_.data(), n, ctx, inputsFor(f, n));
         applyGain(mixL_.data(), mixR_.data(), n, advance(f.out, n));
-        if (meters && fi < size_t(kMaxFxMeters) && f.dev->hasReductionMeter()) publishReduction(*meters, -1, int(fi), *f.dev);
+        if (meters && fi < size_t(kMaxFxMeters)) {
+            meters->setFxIo(-1, int(fi), inPk, peakOf(mixL_.data(), mixR_.data(), n), meterDecay);
+            if (f.dev->hasReductionMeter()) publishReduction(*meters, -1, int(fi), *f.dev);
+            if (f.dev->hasInfo()) meters->setFxInfo(-1, int(fi), f.dev->info());
+        }
     }
     std::memcpy(outL, mixL_.data(), size_t(n) * sizeof(float));
     std::memcpy(outR, mixR_.data(), size_t(n) * sizeof(float));
@@ -485,7 +504,7 @@ void Graph::setParam(const ParamAddr& a, float value) noexcept {
             if (a.param == kMixGain) masterGain_.setTarget(dbToLin(value));
         } else if (a.slot >= kSlotFx0 && size_t(a.slot - kSlotFx0) < masterFx_.size()) {
             auto& f = masterFx_[size_t(a.slot - kSlotFx0)];
-            if (a.param == kParamOut) f.out.setTarget(dbToLin(value)); else f.dev->setParam(a.param, value);
+            if (a.param == kParamOut) f.out.setTarget(dbToLin(value)); else if (a.param == kParamIn) f.in.setTarget(dbToLin(value)); else f.dev->setParam(a.param, value);
         }
         return;
     }
@@ -521,7 +540,7 @@ void Graph::setParam(const ParamAddr& a, float value) noexcept {
         else if (t.inst) t.inst->setParam(a.param, value);
     } else if (a.slot >= kSlotFx0 && size_t(a.slot - kSlotFx0) < t.fx.size()) {
         auto& f = t.fx[size_t(a.slot - kSlotFx0)];
-        if (a.param == kParamOut) f.out.setTarget(dbToLin(value)); else f.dev->setParam(a.param, value);
+        if (a.param == kParamOut) f.out.setTarget(dbToLin(value)); else if (a.param == kParamIn) f.in.setTarget(dbToLin(value)); else f.dev->setParam(a.param, value);
     }
 }
 

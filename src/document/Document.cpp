@@ -238,6 +238,16 @@ Document::Exec Document::execute(const Command& c) {
         Track& t = p_.tracks[idx];
         const std::string f = need(a, "field").get<std::string>();
         const json old = trackGet(t, f);
+        if (f == "output") {                                        // a bus is routed to the master or to another bus, never round to itself
+            const json& ov = need(a, "value");
+            if (ov.is_string() && !ov.get<std::string>().empty() && ov.get<std::string>() != "master") {
+                const std::string o = ov.get<std::string>();
+                const auto tgt = std::find_if(p_.tracks.begin(), p_.tracks.end(), [&](const Track& x) { return x.id == o; });
+                if (tgt == p_.tracks.end() || tgt->kind != TrackKind::Bus) bad("an output goes to the master or to a bus");
+                if (o == t.id) bad("a bus cannot output to itself");
+                if (busReaches(p_, o, t.id)) bad("that output would close a loop");
+            }
+        }
         trackSet(t, f, need(a, "value"));
         ex.inverse = {"track.set", {{"uid", t.uid}, {"field", f}, {"value", old}}};
         if (f == "gain") ex.info.params.push_back({t.id + "|mix|gain", t.gainDb});
@@ -311,6 +321,12 @@ Document::Exec Document::execute(const Command& c) {
         const json& v = need(a, "value");
         json old;
         if (f == "on") { if (!v.is_boolean()) bad("device.on needs a boolean"); old = d.on; d.on = v.get<bool>(); ex.info = structuralChange(); }
+        else if (f == "in") {
+            old = d.inDb ? json(*d.inDb) : json(nullptr);
+            if (v.is_null()) d.inDb.reset(); else if (v.is_number()) d.inDb = v.get<double>(); else bad("device.in needs a number or null");
+            const std::string pre = fxKeyPrefix(l);
+            if (pre.empty()) ex.info = structuralChange(); else ex.info.params.push_back({pre + "in", d.inDb.value_or(0.0)});
+        }
         else if (f == "out") {
             old = d.outDb ? json(*d.outDb) : json(nullptr);
             if (v.is_null()) d.outDb.reset(); else if (v.is_number()) d.outDb = v.get<double>(); else bad("device.out needs a number or null");

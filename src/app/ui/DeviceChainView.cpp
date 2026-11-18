@@ -1,6 +1,7 @@
 #include "app/ui/DeviceChainView.h"
 
 #include "app/ui/ChordResonatorView.h"
+#include "app/ui/DrumKitView.h"
 #include "app/ui/FxView.h"
 #include "project/ProjectJson.h"
 
@@ -18,8 +19,9 @@ class DeviceChainView::Panel : public juce::Component {
 public:
     Panel(app::AppModel& m, const project::DeviceSpec& d, app::Chain chain, bool master, size_t slot, size_t slots, int availH)
         : model_(m), uid_(d.uid), chain_(chain), master_(master), slot_(slot), slots_(slots), type_(d.type),
-          power_("", col::play), left_("<"), right_(">"), close_("x") {
+          power_("", col::play), left_("<"), right_(">"), close_("x"), inTrim_("IN"), outTrim_("OUT") {
         info_ = app::deviceInfoFor(chain, d);
+        strip_ = chain == app::Chain::Effect ? TrimStrip::kWidth : 0;                      // every effect has an input and an output trim with a meter
         plugin_ = d.type == "plugin";
         meterBands_ = d.type == "mbcomp" ? 3 : (d.type == "comp" || d.type == "opto" || d.type == "gate") ? 1 : 0;   // gain-reduction meters
         keyable_ = d.type == "comp" || d.type == "opto" || d.type == "mbcomp" || d.type == "gate";   // dynamics: they can detect on another track
@@ -27,8 +29,9 @@ public:
         const int rows = std::max(1, (availH - kPanelHeader - kPad - (special() ? 26 : 0)) / kKnobH);
         custom_ = d.type == "chordres" && info_ && !info_->params.empty();    // a picture of the chord, not a grid of knobs
         if (!custom_ && info_ && chain == app::Chain::Effect && !plugin_) fx_ = FxView::make(model_, uid_, *info_, availH - (special() ? 26 : 0));     // every other effect has a picture too
-        if (custom_ || fx_) meterBands_ = 0;                                   // the picture shows its own gain reduction
-        const size_t n = (custom_ || fx_) ? 0 : info_ ? (plugin_ ? std::min(info_->params.size(), kMaxPluginKnobs) : info_->params.size()) : 0;
+        if (chain == app::Chain::Instrument && info_ && app::isDrumKit(d.type)) drumKit_ = std::make_unique<DrumKitView>(m, d.uid, *info_, availH - 36);
+        if (custom_ || fx_ || drumKit_) meterBands_ = 0;                                   // the picture shows its own gain reduction
+        const size_t n = (custom_ || fx_ || drumKit_) ? 0 : info_ ? (plugin_ ? std::min(info_->params.size(), kMaxPluginKnobs) : info_->params.size()) : 0;
         const int cols = n ? int((n + size_t(rows) - 1) / size_t(rows)) : 0;
         width_ = std::max(150, cols * kKnobW + 2 * kPad + (meterBands_ ? meterBands_ * kMeterW + 10 : 0));
         if (custom_) {
@@ -38,6 +41,20 @@ public:
         } else if (fx_) {
             width_ = std::max(width_, fx_->preferredWidth() + 2 * kPad);
             addAndMakeVisible(*fx_);
+        } else if (drumKit_) {
+            width_ = drumKit_->preferredWidth() + 2 * kPad;
+            addAndMakeVisible(*drumKit_);
+        }
+        width_ += 2 * strip_;
+        if (strip_) {
+            for (auto* ts : {&inTrim_, &outTrim_}) addAndMakeVisible(*ts);
+            const std::string field = "in";
+            inTrim_.onBegin = [this] { model_.beginGesture("input trim"); };
+            inTrim_.onChange = [this](double v) { model_.apply({"device.set", {{"uid", uid_}, {"field", "in"}, {"value", std::abs(v) < 0.05 ? nlohmann::json(nullptr) : nlohmann::json(v)}}}); };
+            inTrim_.onEnd = [this] { model_.endGesture(); };
+            outTrim_.onBegin = [this] { model_.beginGesture("output trim"); };
+            outTrim_.onChange = [this](double v) { model_.apply({"device.set", {{"uid", uid_}, {"field", "out"}, {"value", std::abs(v) < 0.05 ? nlohmann::json(nullptr) : nlohmann::json(v)}}}); };
+            outTrim_.onEnd = [this] { model_.endGesture(); };
         }
         if (chain != app::Chain::Instrument) { for (juce::Component* c : std::initializer_list<juce::Component*>{&power_, &left_, &right_, &close_}) addAndMakeVisible(c); }
         power_.setToggleable(true);
@@ -50,7 +67,7 @@ public:
                 const auto& spec = info_->params[i];
                 auto k = std::make_unique<Knob>(spec, app::paramLabelFor(d, spec.key), spec.audioRate ? col::meterMid : accent());   // audio-rate ports stand out
                 const int r = int(i) % rows, c = int(i) / rows;
-                k->setBounds(kPad + c * kKnobW, kPanelHeader + 4 + r * kKnobH, kKnobW, kKnobH);
+                k->setBounds(kPad + strip_ + c * kKnobW, kPanelHeader + 4 + r * kKnobH, kKnobW, kKnobH);
                 const std::string key = spec.key;
                 if (plugin_) {   // a plugin keeps its own values (and saves them in its state): the knob drives it directly
                     k->onChange = [this, i](double v) { if (auto* pp = model_.pluginProvider()) pp->setValue(uid_, i, float(v)); };
@@ -64,8 +81,8 @@ public:
             }
         }
         if (special()) {
-            extra_ = std::make_unique<Chip>(plugin_ ? "Open editor" : keyable_ ? "Sidechain: off" : type_ == "duck" ? "Source: ..." : type_ == "drum" ? "Pad samples..." : "Load sample...");
-            extra_->onClick = [this] { plugin_ ? openEditor() : keyable_ ? pickKey() : type_ == "duck" ? pickSource() : type_ == "drum" ? pickPadSamples() : pickSample(); };
+            extra_ = std::make_unique<Chip>(plugin_ ? "Open editor" : keyable_ ? "Sidechain: off" : type_ == "duck" ? "Source: ..." : app::isDrumKit(type_) ? "Pad samples..." : "Load sample...");
+            extra_->onClick = [this] { plugin_ ? openEditor() : keyable_ ? pickKey() : type_ == "duck" ? pickSource() : app::isDrumKit(type_) ? pickPadSamples() : pickSample(); };
             addAndMakeVisible(*extra_);
         }
         sync(d);
@@ -78,6 +95,7 @@ public:
     void updateMeters() {
         if (body_) body_->tick();
         if (fx_) fx_->tick();
+        if (strip_) { inTrim_.setLevel(model_.fxInputPeak(uid_)); outTrim_.setLevel(model_.fxOutputPeak(uid_)); }
         if (!meterBands_) return;
         bool changed = false;
         for (int b = 0; b < meterBands_; ++b) {
@@ -98,6 +116,8 @@ public:
     void sync(const project::DeviceSpec& d) {
         if (body_) body_->sync(d);
         if (fx_) fx_->sync(d);
+        if (strip_) { inTrim_.setValue(d.inDb.value_or(0.0)); outTrim_.setValue(d.outDb.value_or(0.0)); }
+        if (drumKit_) drumKit_->sync(d);
         if (info_)
             for (size_t i = 0; i < knobs_.size(); ++i) {
                 if (plugin_) {
@@ -115,7 +135,7 @@ public:
             if (type_ == "duck") {
                 const auto* t = app::edit::findTrackById(model_.project(), d.srcTrack);
                 extra_->setText(juce::String("Source: ") + (t ? juce::String(t->name) : juce::String("none")));
-            } else if (type_ == "drum") {
+            } else if (app::isDrumKit(type_)) {
                 extra_->setText(d.padSamples.empty() ? juce::String("Pad samples...") : juce::String(int(d.padSamples.size())) + " pad sample(s)");
             } else if (plugin_) {
                 extra_->setText("Open editor");
@@ -135,9 +155,18 @@ public:
         right_.setBounds(h.removeFromRight(20));
         left_.setBounds(h.removeFromRight(20));
         power_.setBounds(h.removeFromLeft(20));
-        if (extra_) extra_->setBounds(kPad, getHeight() - 26, getWidth() - 2 * kPad, 20);
-        if (body_) body_->setBounds(kPad, kPanelHeader + 2, getWidth() - 2 * kPad, std::max(40, getHeight() - kPanelHeader - kPad - 2));
-        if (fx_) fx_->setBounds(kPad, kPanelHeader + 2, getWidth() - 2 * kPad, std::max(40, getHeight() - kPanelHeader - kPad - 2 - (special() ? 26 : 0)));
+        const int inL = kPad + strip_, inW = getWidth() - 2 * kPad - 2 * strip_;      // the content sits between the two trim strips
+        if (strip_) {
+            inTrim_.setBounds(2, kPanelHeader + 1, TrimStrip::kWidth - 2, std::max(60, getHeight() - kPanelHeader - 6));
+            outTrim_.setBounds(getWidth() - TrimStrip::kWidth, kPanelHeader + 1, TrimStrip::kWidth - 2, std::max(60, getHeight() - kPanelHeader - 6));
+        }
+        if (extra_ && !drumKit_) extra_->setBounds(inL, getHeight() - 26, inW, 20);
+        if (body_) body_->setBounds(inL, kPanelHeader + 2, inW, std::max(40, getHeight() - kPanelHeader - kPad - 2));
+        if (drumKit_) {                                         // the kit dropdown and the pad-samples chip share the header row with the title
+            drumKit_->setBounds(inL, 2, inW, std::max(60, getHeight() - kPad - 2));
+            if (extra_) extra_->setBounds(inL + 118 + 172, 4, 130, 20);
+        }
+        if (fx_) fx_->setBounds(inL, kPanelHeader + 2, inW, std::max(40, getHeight() - kPanelHeader - kPad - 2 - (special() ? 26 : 0)));
     }
     void paint(juce::Graphics& g) override {
         auto r = getLocalBounds().toFloat().reduced(1.0f);
@@ -172,7 +201,7 @@ public:
     void mouseDown(const juce::MouseEvent&) override { model_.selectDevice(uid_); }
 
 private:
-    bool special() const { return plugin_ || keyable_ || type_ == "duck" || type_ == "drum" || type_ == "sampler" || type_ == "ksampler" || type_ == "granular"; }
+    bool special() const { return plugin_ || keyable_ || type_ == "duck" || app::isDrumKit(type_) || type_ == "sampler" || type_ == "ksampler" || type_ == "granular"; }
     juce::Colour accent() const { return chain_ == app::Chain::Instrument ? col::accent : chain_ == app::Chain::MidiFx ? col::meterMid : juce::Colour(0xff5aa9e6); }
     void move(int delta) {
         const auto& p = model_.project();
@@ -287,7 +316,7 @@ private:
             const auto it = d ? d->padSamples.find(std::to_string(pad)) : decltype(d->padSamples.end()){};
             const std::string cur = d && it != d->padSamples.end() ? it->second : std::string();
             sampleMenu(sub, 100 * (pad + 1), true, cur);
-            m.addSubMenu(juce::String(app::drumPadName(pad)) + (cur.empty() ? "" : "  *"), sub);
+            m.addSubMenu(juce::String(app::drumPadName(type_, pad)) + (cur.empty() ? "" : "  *"), sub);
         }
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(extra_.get()), [this](int r) {
             if (r < 100) return;
@@ -312,12 +341,15 @@ private:
     bool plugin_ = false, keyable_ = false, custom_ = false;
     std::unique_ptr<ChordResonatorView> body_;
     std::unique_ptr<FxView> fx_;
+    std::unique_ptr<DrumKitView> drumKit_;
     int meterBands_ = 0;
     std::array<float, 3> reduction_{};
     const app::DeviceInfo* info_ = nullptr;
     juce::String label_;
     int width_ = 150;
     Chip power_, left_, right_, close_;
+    TrimStrip inTrim_, outTrim_;
+    int strip_ = 0;
     std::vector<std::unique_ptr<Knob>> knobs_;
     std::unique_ptr<Chip> extra_;
     std::unique_ptr<juce::FileChooser> chooser_;
@@ -326,9 +358,6 @@ private:
 DeviceChainView::DeviceChainView(app::AppModel& m) : View(m) {
     addAndMakeVisible(addFx_);
     addAndMakeVisible(addMidi_);
-    addAndMakeVisible(master_);
-    master_.setToggleable(true);
-    master_.onToggle = [this](bool) { rebuild(); };
     addFx_.onClick = [this] {
         juce::PopupMenu menu;
         std::vector<std::string> types;
@@ -375,11 +404,11 @@ DeviceChainView::~DeviceChainView() = default;
 
 juce::String DeviceChainView::signature() const {
     const auto& p = model.project();
-    juce::String s = master_.isOn() ? "M" : "T" + juce::String(juce::int64(model.selection().track));
+    juce::String s = model.selection().master ? "M" : "T" + juce::String(juce::int64(model.selection().track));
     s << "h" << getHeight();
     auto* pp = model.pluginProvider();
     auto add = [&](const project::DeviceSpec& d) { s << "|" << juce::String(juce::int64(d.uid)) << d.type << ((d.type == "plugin" && pp && pp->live(d.uid)) ? "L" : ""); };
-    if (master_.isOn()) for (auto& d : p.masterFx) add(d);
+    if (model.selection().master) for (auto& d : p.masterFx) add(d);
     else if (const auto* t = app::edit::findTrack(p, model.selection().track)) {
         for (auto& d : t->midifx) add(d);
         if (!t->inst.type.empty()) add(t->inst);
@@ -411,15 +440,15 @@ void DeviceChainView::rebuild() {
         addAndMakeVisible(*panel);
         panels_.push_back(std::move(panel));
     };
-    if (master_.isOn()) {
+    if (model.selection().master) {
         for (size_t i = 0; i < p.masterFx.size(); ++i) make(p.masterFx[i], app::Chain::Effect, true, i, p.masterFx.size());
     } else if (const auto* t = app::edit::findTrack(p, model.selection().track)) {
         for (size_t i = 0; i < t->midifx.size(); ++i) make(t->midifx[i], app::Chain::MidiFx, false, i, t->midifx.size());
         if (!t->inst.type.empty() && t->kind != project::TrackKind::Bus) make(t->inst, app::Chain::Instrument, false, 0, 1);
         for (size_t i = 0; i < t->fx.size(); ++i) make(t->fx[i], app::Chain::Effect, false, i, t->fx.size());
     }
-    addFx_.setVisible(master_.isOn() || model.selection().track != 0);
-    addMidi_.setVisible(!master_.isOn() && model.selection().track != 0);
+    addFx_.setVisible(model.selection().master || model.selection().track != 0);
+    addMidi_.setVisible(!model.selection().master && model.selection().track != 0);
     for (auto& panel : panels_)
         if (const auto* d = model.document().findDevice(panel->uid())) panel->sync(*d);
     layoutPanels();
@@ -438,8 +467,7 @@ void DeviceChainView::resized() {
     addFx_.setBounds(top.removeFromLeft(84));
     top.removeFromLeft(6);
     addMidi_.setBounds(top.removeFromLeft(70));
-    master_.setBounds(top.removeFromRight(110));
-    if (builtHeight_ != getHeight()) { builtHeight_ = getHeight(); if (!panels_.empty() || master_.isOn()) rebuild(); else layoutPanels(); }
+    if (builtHeight_ != getHeight()) { builtHeight_ = getHeight(); if (!panels_.empty() || model.selection().master) rebuild(); else layoutPanels(); }
     else layoutPanels();
 }
 
@@ -452,7 +480,7 @@ void DeviceChainView::paint(juce::Graphics& g) {
     if (panels_.empty()) {
         g.setColour(col::dim);
         g.setFont(uiFont(13.0f));
-        g.drawText(master_.isOn() ? "The master chain is empty. Add an effect, or drag one from the browser." : model.selection().track ? "No devices. Double-click one in the browser, or drag it here." : "Select a track to see its devices.",
+        g.drawText(model.selection().master ? "The master chain is empty. Add an effect, or drag one from the browser." : model.selection().track ? "No devices. Double-click one in the browser, or drag it here." : "Select a track to see its devices.",
                    getLocalBounds().withTrimmedTop(kTopH), juce::Justification::centred);
     }
     if (dropHint_) { g.setColour(col::accent); g.drawRect(getLocalBounds().withTrimmedTop(kTopH), 2); }
@@ -474,7 +502,7 @@ void DeviceChainView::itemDropped(const SourceDetails& d) {
     const auto uid = model.selection().track;
     const std::string chain = parts[1].toStdString(), type = parts[2].toStdString();
     if (chain == "inst") { if (uid) model.apply(app::edit::setInstrument(p, uid, type)); }
-    else if (master_.isOn() && chain == "fx") model.apply(app::edit::addDevice(p, 0, "master", type));
+    else if (model.selection().master && chain == "fx") model.apply(app::edit::addDevice(p, 0, "master", type));
     else if (uid) model.apply(app::edit::addDevice(p, uid, chain, type));
 }
 

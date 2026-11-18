@@ -91,11 +91,7 @@ public:
         set(spec_.def);
         if (onEnd) onEnd();
     }
-    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& w) override {
-        if (onBegin) onBegin();
-        set(app::paramFromUnit(spec_, app::paramToUnit(spec_, value_) + double(w.deltaY) * 0.25));
-        if (onEnd) onEnd();
-    }
+    // No mouseWheelMove: the wheel scrolls the pane under the pointer and never changes a value that happens to be hovered.
 
 private:
     void set(double v) {
@@ -128,6 +124,129 @@ inline void drawMeter(juce::Graphics& g, juce::Rectangle<float> r, float peak) {
     g.setGradientFill(grad);
     g.fillRect(bar);
 }
+
+// A thin horizontal slider with its label and value written on it: the pan and the per-bus send rows of a mix strip. Click or drag
+// sets the value from the position, double-click resets it. The wheel scrolls the pane, it never edits.
+class BarSlider : public juce::Component {
+public:
+    BarSlider(juce::String label, double lo, double hi, double def, bool bipolar = false) : label_(std::move(label)), lo_(lo), hi_(hi), def_(def), bipolar_(bipolar), v_(def) {}
+    std::function<void()> onBegin, onEnd;
+    std::function<void(double)> onChange;
+    void setValue(double v) { if (!dragging_ && std::abs(v - v_) > 1e-9) { v_ = v; repaint(); } }
+    double value() const { return v_; }
+    void setLabel(juce::String l) { if (l != label_) { label_ = std::move(l); repaint(); } }
+    void setAccent(juce::Colour c) { accent_ = c; repaint(); }
+    void setFormatter(std::function<juce::String(double)> f) { fmt_ = std::move(f); }
+    double unit() const { return (std::clamp(v_, lo_, hi_) - lo_) / (hi_ - lo_); }
+    void paint(juce::Graphics& g) override {
+        auto b = getLocalBounds().toFloat().reduced(0.0f, 1.0f);
+        fillRounded(g, b, col::black.withAlpha(0.55f), 3.0f);
+        const float u = float(unit());
+        auto fill = b.reduced(1.0f);
+        if (bipolar_) { const float c = fill.getCentreX(), x = fill.getX() + u * fill.getWidth(); fill = juce::Rectangle<float>(std::min(c, x), fill.getY(), std::abs(x - c), fill.getHeight()); }
+        else fill = fill.withWidth(std::max(0.0f, fill.getWidth() * u));
+        fillRounded(g, fill, std::abs(v_ - (bipolar_ ? 0.0 : lo_)) < 1e-9 ? col::faint : accent_.withAlpha(0.75f), 2.0f);
+        g.setFont(uiFont(9.5f, true));
+        g.setColour(col::text.withAlpha(0.9f));
+        g.drawText(label_, b.reduced(4, 0).toNearestInt(), juce::Justification::centredLeft, true);
+        g.setFont(monoFont(9.0f));
+        g.setColour(col::text.withAlpha(0.8f));
+        g.drawText(fmt_ ? fmt_(v_) : juce::String(v_, 2), b.reduced(4, 0).toNearestInt(), juce::Justification::centredRight, true);
+    }
+    void mouseDown(const juce::MouseEvent& e) override { dragging_ = true; if (onBegin) onBegin(); drag(e); }
+    void mouseDrag(const juce::MouseEvent& e) override { drag(e); }
+    void mouseUp(const juce::MouseEvent&) override { if (dragging_) { dragging_ = false; if (onEnd) onEnd(); } }
+    void mouseDoubleClick(const juce::MouseEvent&) override { if (onBegin) onBegin(); set(def_); if (onEnd) onEnd(); }
+
+private:
+    void drag(const juce::MouseEvent& e) {
+        double u = std::clamp(double(e.position.x - 2.0f) / std::max(1.0, double(getWidth() - 4)), 0.0, 1.0);
+        double v = lo_ + u * (hi_ - lo_);
+        if (bipolar_ && std::abs(v) < (hi_ - lo_) * 0.03) v = 0.0;               // a detent at the middle
+        set(std::round(v * 100.0) / 100.0);
+    }
+    void set(double v) { v = std::clamp(v, lo_, hi_); if (std::abs(v - v_) < 1e-9) return; v_ = v; repaint(); if (onChange) onChange(v); }
+    juce::String label_;
+    double lo_, hi_, def_;
+    bool bipolar_, dragging_ = false;
+    double v_;
+    juce::Colour accent_ = col::accent;
+    std::function<juce::String(double)> fmt_;
+};
+
+// The trim strip down the side of an effect panel (ARCH 30): a small knob (the gain in dB, +-24) over a thin vertical level meter. One on
+// the far left trims what goes into the effect and meters it; one on the far right trims what comes out. Drag up or down, Shift for fine,
+// double-click for 0 dB. The wheel does nothing here: it scrolls the pane.
+class TrimStrip : public juce::Component {
+public:
+    static constexpr int kWidth = 24, kKnobH = 38;
+    explicit TrimStrip(juce::String name) : name_(std::move(name)) {}
+    std::function<void()> onBegin, onEnd;
+    std::function<void(double)> onChange;
+    void setValue(double db) { if (std::abs(db - db_) > 1e-9 && !dragging_) { db_ = db; repaint(); } }
+    double value() const { return db_; }
+    void setLevel(float peak) { if (std::abs(peak - level_) > 0.002f) { level_ = peak; repaint(meterRect().toNearestInt().expanded(2)); } }
+    float level() const { return level_; }
+    juce::Rectangle<float> meterRect() const { return {float(getWidth()) / 2.0f - 2.5f, float(kKnobH) + 2.0f, 5.0f, std::max(10.0f, float(getHeight() - kKnobH - 6))}; }
+    juce::Rectangle<int> knobRect() const { return {0, 0, getWidth(), kKnobH}; }
+
+    void paint(juce::Graphics& g) override {
+        const auto k = knobRect().toFloat();
+        const float d = 18.0f;
+        auto dial = juce::Rectangle<float>(d, d).withCentre({k.getCentreX(), k.getY() + 13.0f});
+        const float a0 = juce::MathConstants<float>::pi * 1.25f, a1 = juce::MathConstants<float>::pi * 2.75f;
+        const float u = float((std::clamp(db_, -kRange, kRange) + kRange) / (2.0 * kRange));
+        juce::Path track, arc;
+        track.addCentredArc(dial.getCentreX(), dial.getCentreY(), d / 2, d / 2, 0, a0, a1, true);
+        g.setColour(col::line); g.strokePath(track, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        const float aa = a0 + u * (a1 - a0);
+        const float am = (a0 + a1) / 2.0f;
+        arc.addCentredArc(dial.getCentreX(), dial.getCentreY(), d / 2, d / 2, 0, std::min(am, aa), std::max(am, aa), true);   // from the middle: up is right, down is left
+        g.setColour(std::abs(db_) < 0.05 ? col::dim : (name_ == "IN" ? col::meterMid : col::accent)); g.strokePath(arc, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(col::text);
+        g.drawLine(dial.getCentreX() + std::sin(aa) * 1.5f, dial.getCentreY() - std::cos(aa) * 1.5f, dial.getCentreX() + std::sin(aa) * (d / 2 - 3), dial.getCentreY() - std::cos(aa) * (d / 2 - 3), 1.5f);
+        g.setColour(std::abs(db_) < 0.05 ? col::faint : col::text);
+        g.setFont(monoFont(9.0f));
+        const juce::String t = dragging_ || std::abs(db_) >= 0.05 ? juce::String(db_, std::abs(db_) < 10 ? 1 : 0) : name_;
+        g.drawText(t, juce::Rectangle<int>(0, int(k.getY()) + 24, getWidth(), 11), juce::Justification::centred);
+        const auto mr = meterRect();
+        drawMeter(g, mr, level_);
+        g.setColour(col::dim.withAlpha(0.6f));                                              // a 0 dBFS tick
+        const float zeroY = mr.getY() + 1.0f + (mr.getHeight() - 2.0f) * (1.0f - (60.0f) / 66.0f);
+        g.drawHorizontalLine(int(zeroY), mr.getX() - 2.0f, mr.getRight() + 2.0f);
+    }
+    void mouseDown(const juce::MouseEvent& e) override {
+        if (e.y > kKnobH + 2) return;
+        dragging_ = true; start_ = db_;
+        if (onBegin) onBegin();
+        repaint();
+    }
+    void mouseDrag(const juce::MouseEvent& e) override {
+        if (!dragging_) return;
+        set(start_ - double(e.getDistanceFromDragStartY()) * (e.mods.isShiftDown() ? 0.05 : 0.25));
+    }
+    void mouseUp(const juce::MouseEvent&) override { if (dragging_) { dragging_ = false; if (onEnd) onEnd(); repaint(); } }
+    void mouseDoubleClick(const juce::MouseEvent& e) override {
+        if (e.y > kKnobH + 2) return;
+        if (onBegin) onBegin();
+        set(0.0);
+        if (onEnd) onEnd();
+    }
+
+private:
+    static constexpr double kRange = 24.0;
+    void set(double v) {
+        v = std::clamp(std::round(v * 10.0) / 10.0, -kRange, kRange);
+        if (std::abs(v - db_) < 1e-9) return;
+        db_ = v;
+        repaint();
+        if (onChange) onChange(v);
+    }
+    juce::String name_;
+    double db_ = 0.0, start_ = 0.0;
+    float level_ = 0.0f;
+    bool dragging_ = false;
+};
 
 // Vertical fader on a dB scale -inf..+6 with a 0 dB tick.
 class Fader : public juce::Component {

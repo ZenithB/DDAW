@@ -27,6 +27,7 @@ json deviceJson(const DeviceSpec& d, bool isInst = false) {
     j["type"] = d.type;
     if (!isInst) j["on"] = d.on;
     j["params"] = paramsJson(d.params);
+    if (d.inDb) j["in"] = *d.inDb;
     if (d.outDb) j["out"] = *d.outDb;
     if (!d.srcTrack.empty()) j["srcTrack"] = d.srcTrack;
     if (d.srcPitch) j["srcPitch"] = *d.srcPitch;

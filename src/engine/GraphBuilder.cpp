@@ -44,6 +44,7 @@ void applyParams(Dev& dev, const DeviceSpec& spec, const std::string& where, std
     auto specs = dev.params();
     for (auto& ps : specs) resolver.insert(keyPrefix + ps.key, {target, slot, ps.index});
     resolver.insert(keyPrefix + "out", {target, slot, kParamOut});
+    resolver.insert(keyPrefix + "in", {target, slot, kParamIn});
     for (auto& [k, v] : spec.params) {
         const int idx = findParam(specs, k);
         if (idx < 0) { issues.insert(where + ": unknown param '" + k + "'"); continue; }
@@ -257,6 +258,8 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
             fs.dev = std::move(dev);
             fs.out.prepare(sr, 15.0f);
             fs.out.snap(f.outDb ? dbToLin(*f.outDb) : 1.0f);
+            fs.in.prepare(sr, 15.0f);
+            fs.in.snap(f.inDb ? dbToLin(*f.inDb) : 1.0f);
             s.fx.push_back(std::move(fs));
         }
 
@@ -523,6 +526,7 @@ BuildResult buildGraph(const project::Fixture& fx, double sr, uint32_t epoch, co
         masterBuilt.push_back({fxIdOf(f), slotIdx, dev->params(), &f});
         slot.dev = std::move(dev);
         slot.out.snap(f.outDb ? dbToLin(*f.outDb) : 1.0f);
+        slot.in.snap(f.inDb ? dbToLin(*f.inDb) : 1.0f);
     }
 
     // ---- duck routes: source ids resolve to track indices (unresolvable sources are dropped) ----

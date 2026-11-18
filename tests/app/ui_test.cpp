@@ -2,6 +2,8 @@
 // document, so the assertions are on the project, not on pixels.
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+#include "EmptyModel.h"
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -12,9 +14,10 @@
 #include "app/ui/ChordResonatorView.h"
 #include "app/ui/ClipEditor.h"
 #include "app/ui/DeviceChainView.h"
+#include "app/ui/DrumKitView.h"
 #include "app/ui/FxView.h"
 #include "app/ui/MainComponent.h"
-#include "app/ui/MixerView.h"
+#include "app/ui/RoutingView.h"
 #include "app/ui/SessionView.h"
 #include "app/ui/TransportBar.h"
 #include "plugins/PluginHost.h"
@@ -65,55 +68,11 @@ template <class T> void findAll(juce::Component& root, std::vector<T*>& out) {
 struct Rig {
     engine::Engine eng;
     std::unique_ptr<app::AppModel> m;
-    Rig() { gui(); eng.prepare(48000.0); m = std::make_unique<app::AppModel>(eng, 48000.0); }
+    Rig() { gui(); eng.prepare(48000.0); m = std::make_unique<app::AppModel>(eng, 48000.0); startEmpty(*m); }
     void demo() { app::buildDemo(*m); }
 };
 
 }  // namespace
-
-TEST_CASE("session view: hit testing, creating clips, mute, selection and delete", "[ui][session]") {
-    Rig r; r.demo();
-    ui::SessionView v(*r.m);
-    v.setSize(1000, 600);
-    using K = ui::SessionView::Hit::Kind;
-
-    const int x1 = ui::SessionView::kSceneW + ui::SessionView::kTrackW / 2 + 20;   // track 0 body
-    const int y1 = ui::SessionView::kHeaderH + ui::SessionView::kRowH / 2;          // scene 0
-    CHECK(v.hitAt({x1, y1}).kind == K::Slot);
-    CHECK(v.hitAt({x1, y1}).track == 0);
-    CHECK(v.hitAt({ui::SessionView::kSceneW + 8, y1}).kind == K::SlotLaunch);
-    CHECK(v.hitAt({8, y1}).kind == K::SceneLaunch);
-    CHECK(v.hitAt({x1, 10}).kind == K::TrackHeader);
-    CHECK(v.hitAt({ui::SessionView::kSceneW + 6 * ui::SessionView::kTrackW + 10, 20}).kind == K::AddTrack);
-    CHECK(v.hitAt({20, ui::SessionView::kHeaderH + 5 * ui::SessionView::kRowH + 10}).kind == K::AddScene);
-
-    // an empty slot on the Lead track (index 3), scene s1: double-click creates a clip
-    const auto& p0 = r.m->project();
-    REQUIRE_FALSE(p0.clips.count("t4|s1"));
-    const int x4 = ui::SessionView::kSceneW + 3 * ui::SessionView::kTrackW + 60;
-    Mouse(v).dbl(pt(x4, y1));
-    REQUIRE(r.m->project().clips.count("t4|s1"));
-    CHECK(r.m->selection().clip.valid());
-    CHECK(r.m->selection().clip.scene == "s1");
-
-    // delete removes it again
-    CHECK(v.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey)));
-    CHECK_FALSE(r.m->project().clips.count("t4|s1"));
-    r.m->undo();
-    CHECK(r.m->project().clips.count("t4|s1"));
-
-    // mute button of track 0: the M chip is in the bottom row of the header
-    const int hy = ui::SessionView::kHeaderH - 4 - 14;
-    Mouse(v).click(pt(ui::SessionView::kSceneW + 2 + 4 + 28 + 10, hy));
-    CHECK(r.m->project().tracks[0].mute);
-    Mouse(v).click(pt(ui::SessionView::kSceneW + 2 + 4 + 28 + 10, hy));
-    CHECK_FALSE(r.m->project().tracks[0].mute);
-
-    // + Scene and + track
-    const size_t scenes = r.m->project().scenes.size();
-    Mouse(v).click(pt(20, ui::SessionView::kHeaderH + int(scenes) * ui::SessionView::kRowH + 10));
-    CHECK(r.m->project().scenes.size() == scenes + 1);
-}
 
 TEST_CASE("arrangement view: create, move, resize and delete clips", "[ui][arrangement]") {
     Rig r; r.demo();
@@ -422,44 +381,6 @@ TEST_CASE("piano roll: marquee selection and arrow nudging; drum rows", "[ui][cl
     CHECK(app::drumPadName(1) == std::string("Snare"));
 }
 
-TEST_CASE("mixer: fader, mute and rename route to the document, one undo step per gesture", "[ui][mixer]") {
-    Rig r; r.demo();
-    ui::MixerView v(*r.m);
-    v.setSize(1000, 560);
-    v.refresh(app::ModelEvent::Document);
-    REQUIRE(v.stripCount() == 6);
-    std::vector<ui::Fader*> faders;
-    findAll(v, faders);
-    REQUIRE(faders.size() == 7);   // six strips and the master
-    auto* f = faders[0];
-    const double before = r.m->project().tracks[0].gainDb;
-    {
-        Mouse m(*f);
-        const int h = f->getHeight();
-        m.down(pt(20, h / 2)).drag(pt(20, h / 6)).drag(pt(20, 4)).up(pt(20, 4));
-    }
-    CHECK(r.m->project().tracks[0].gainDb > before);
-    r.m->undo();
-    CHECK(r.m->project().tracks[0].gainDb == Approx(before));   // the whole drag was one step
-
-    // the master fader edits meta.masterGain
-    {
-        Mouse m(*faders.back());
-        const int h = faders.back()->getHeight();
-        m.down(pt(20, h)).drag(pt(20, h * 2 / 3)).up(pt(20, h * 2 / 3));
-    }
-    CHECK(r.m->project().meta.masterGainDb != 0.0);
-
-    std::vector<ui::Chip*> chips;
-    findAll(v, chips);
-    REQUIRE_FALSE(chips.empty());
-    ui::Chip* mute = nullptr;
-    for (auto* c : chips) if (c->text() == "M") { mute = c; break; }   // the first strip's mute chip
-    REQUIRE(mute);
-    mute->mouseUp(Mouse(*mute).ev(pt(5, 5)));
-    CHECK(r.m->project().tracks[0].mute);
-}
-
 TEST_CASE("device chain: knobs edit parameters live, devices power, move and remove", "[ui][devices]") {
     Rig r; r.demo();
     r.m->selectTrack(r.m->project().tracks[2].uid);   // Chords: poly synth, chorus, delay
@@ -533,7 +454,7 @@ TEST_CASE("main window: tabs, selection opens the editor, and every view survive
     ui::MainComponent main(*r.m);
     main.setSize(1440, 900);
     main.resized();
-    for (auto t : {ui::MainComponent::MainTab::Arrangement, ui::MainComponent::MainTab::Mixer, ui::MainComponent::MainTab::Session}) {
+    for (auto t : {ui::MainComponent::MainTab::Arrangement, ui::MainComponent::MainTab::Routing, ui::MainComponent::MainTab::Session}) {
         main.showMain(t);
         main.tick();
     }
@@ -545,10 +466,10 @@ TEST_CASE("main window: tabs, selection opens the editor, and every view survive
     // new project then back to demo: no dangling selections, no crash
     r.m->newProject();
     main.tick();
-    CHECK(r.m->project().tracks.empty());
+    CHECK(r.m->project().tracks.size() == 2);                                      // a new session: Send A and Send B
     r.demo();
     main.tick();
-    CHECK(r.m->project().tracks.size() == 6);
+    CHECK(r.m->project().tracks.size() == 8);                                      // the song's six tracks and the two sends
     // snapshot renders without throwing
     auto img = main.createComponentSnapshot(main.getLocalBounds(), true, 1.0f);
     CHECK(img.getWidth() == 1440);
@@ -585,53 +506,6 @@ TEST_CASE("export: the demo song renders to a valid 24-bit WAV that matches the 
     // nothing to export is reported, not thrown
     r.m->newProject();
     CHECK_FALSE(ui::exportAudio(r.m->project(), *r.m->sampleBank(), "", file).ok);
-}
-
-TEST_CASE("recording UI: arm buttons exist only on audio tracks and toggle the arm state", "[ui][recording]") {
-    Rig r; r.demo();
-    r.m->apply(edit::addTrack(r.m->project(), project::TrackKind::Audio));
-    const auto audioUid = r.m->project().tracks.back().uid;
-    const int audioIdx = int(r.m->project().tracks.size()) - 1;
-
-    ui::SessionView v(*r.m);
-    v.setSize(1200, 600);
-    using K = ui::SessionView::Hit::Kind;
-    const int bx = ui::SessionView::kSceneW + audioIdx * ui::SessionView::kTrackW + 2 + 4;
-    const int by = ui::SessionView::kHeaderH - 4 - 14;
-    CHECK(v.hitAt({bx + 3 * 28 + 10, by}).kind == K::Arm);
-    CHECK(v.hitAt({bx + 3 * 28 + 10, by}).track == audioIdx);
-    // synth and drum tracks have it too (they record the notes played live); a bus does not
-    const int sx = ui::SessionView::kSceneW + 2 + 4;
-    CHECK(v.hitAt({sx + 3 * 28 + 10, by}).kind == K::Arm);
-    CHECK(v.hitAt({ui::SessionView::kSceneW + 5 * ui::SessionView::kTrackW + 2 + 4 + 3 * 28 + 10, by}).kind != K::Arm);   // the Space bus
-    CHECK_FALSE(r.m->recording().armed(audioUid));
-    Mouse(v).click(pt(bx + 3 * 28 + 10, by));
-    CHECK(r.m->recording().armed(audioUid));
-    Mouse(v).click(pt(bx + 3 * 28 + 10, by));
-    CHECK_FALSE(r.m->recording().armed(audioUid));
-
-    // a bus cannot be armed; a synth or drum track can (for notes)
-    r.m->recording().arm(r.m->project().tracks[5].uid, true);
-    CHECK_FALSE(r.m->recording().anyArmed());
-    r.m->recording().arm(r.m->project().tracks[0].uid, true);
-    CHECK(r.m->recording().anyArmed());
-    r.m->recording().arm(r.m->project().tracks[0].uid, false);
-
-    // REC without an armed track reports instead of starting
-    ui::TransportBar bar(*r.m);
-    bar.setSize(1400, 48);
-    std::vector<ui::Chip*> chips;
-    findAll(bar, chips);
-    REQUIRE(chips.size() > 3);
-    ui::Chip* rec = chips[2];   // PLAY, STOP, REC in the order the bar adds them
-    rec->mouseUp(Mouse(*rec).ev(pt(5, 5)));
-    CHECK_FALSE(r.m->recording().recording());
-    CHECK(r.m->status().find("arm a track first") != std::string::npos);
-
-    // arming survives, and is dropped when the track is deleted
-    r.m->recording().arm(audioUid, true);
-    r.m->apply(edit::removeTrack(audioUid));
-    CHECK_FALSE(r.m->recording().anyArmed());
 }
 
 #include "app/ui/ExportDialog.h"
@@ -774,23 +648,6 @@ TEST_CASE("input panel: tracker on/off, routes added, recorded and removed from 
     REQUIRE(loaded.project.tracks[2].perf.size() == 1);
     CHECK(loaded.project.tracks[2].perf[0].source == "loudness");
     CHECK(loaded.project.tracks[2].perf[0].targets[0].pkey == "cutoff");
-}
-
-TEST_CASE("monitoring: the mixer's IN chip routes the input through an audio track", "[ui][tracking]") {
-    Rig r; r.demo();
-    r.m->apply(edit::addTrack(r.m->project(), project::TrackKind::Audio));
-    const auto uid = r.m->project().tracks.back().uid;
-    ui::MixerView v(*r.m);
-    v.setSize(1100, 560);
-    v.refresh(app::ModelEvent::Document);
-    std::vector<ui::Chip*> chips;
-    findAll(v, chips);
-    REQUIRE_FALSE(chips.empty());
-    ui::Chip* in = chips.back();   // the last strip is the audio track: its chips are M, S, R, IN and the master has none
-    CHECK_FALSE(r.m->monitored(uid));
-    in->mouseUp(Mouse(*in).ev(pt(3, 3)));
-    CHECK(r.m->monitored(uid));
-    r.m->tick();   // pushes the flag to the engine for the published graph
 }
 
 TEST_CASE("computer keyboard piano: key map, octave and velocity keys, and it stays out of the way when off", "[ui][midi]") {
@@ -1446,83 +1303,6 @@ TEST_CASE("device chain: a dynamics device shows its sidechain source and follow
     CHECK(n == 1);                                                    // the compressor's only
 }
 
-TEST_CASE("mixer: send returns have their own group, the + Return button adds A then B, and send knobs show whether they lead anywhere", "[ui][mixer][returns]") {
-    Rig r; r.demo();
-    auto& m = *r.m;
-    ui::MixerView v(m);
-    v.setSize(1300, 560);
-    v.refresh(app::ModelEvent::Document);
-    CHECK(v.returnCount() == 0);
-    REQUIRE(v.addReturnVisible());
-    auto sendKnobAlpha = [&](int strip, int which) {   // the track strips' A and B knobs are the 3rd/4th Knobs of a strip (pan, A, B order by creation: pan_, sendA_, sendB_)
-        std::vector<ui::Knob*> ks;
-        findAll(v, ks);
-        (void)strip;
-        return ks.at(size_t(strip * 3 + which))->getAlpha();
-    };
-    CHECK(sendKnobAlpha(0, 1) < 0.5f);                  // no return A yet: the send does nothing, and says so
-    CHECK(sendKnobAlpha(0, 2) < 0.5f);
-
-    v.addReturn();                                      // the button: A
-    v.refresh(app::ModelEvent::Document);
-    REQUIRE(m.project().tracks.size() == 7);
-    const auto& a = m.project().tracks.back();
-    CHECK(a.kind == project::TrackKind::Bus);
-    CHECK(a.send == project::SendBus::A);
-    CHECK(a.name == "Return A");
-    REQUIRE(a.fx.size() == 1);
-    CHECK(a.fx[0].type == "reverb");
-    CHECK(a.fx[0].params.at("mix") == Approx(1.0));     // a return carries only the effect
-    CHECK(v.returnCount() == 1);
-    CHECK(v.stripCount() == 7);
-    CHECK(sendKnobAlpha(0, 1) > 0.9f);
-    CHECK(sendKnobAlpha(0, 2) < 0.5f);                  // B still has no return
-    REQUIRE(v.addReturnVisible());
-
-    v.addReturn();                                      // then B
-    v.refresh(app::ModelEvent::Document);
-    CHECK(m.project().tracks.back().send == project::SendBus::B);
-    CHECK(m.project().tracks.back().fx[0].type == "delay");
-    CHECK(v.returnCount() == 2);
-    CHECK_FALSE(v.addReturnVisible());                  // A and B are taken
-    CHECK(sendKnobAlpha(0, 2) > 0.9f);
-
-    // the returns sit after the tracks and buses whatever their place in the document: the last strips are the returns
-    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth, "Late"));   // a track added after the returns in the document
-    v.refresh(app::ModelEvent::Document);
-    CHECK(v.stripCount() == 9);
-    CHECK(v.returnCount() == 2);
-    // removing a return takes its strip, and the button is back
-    m.apply(edit::removeTrack(m.project().tracks[7].uid));   // Return A
-    v.refresh(app::ModelEvent::Document);
-    CHECK(v.returnCount() == 1);
-    CHECK(v.addReturnVisible());
-}
-
-TEST_CASE("mixer: an imported project's built-in returns get strips whose faders edit the return", "[ui][mixer][returns]") {
-    Rig r;
-    auto& m = *r.m;
-    m.apply(edit::addTrack(m.project(), project::TrackKind::Synth));
-    m.apply({"return.insert", {{"index", 0}, {"ret", {{"id", "r1"}, {"name", "Hall"}, {"fxType", "reverb"}, {"params", {{"mix", 1.0}}}, {"gain", -6.0}}}}});
-    ui::MixerView v(m);
-    v.setSize(1000, 560);
-    v.refresh(app::ModelEvent::Document);
-    REQUIRE(v.legacyReturnCount() == 1);
-    std::vector<ui::Fader*> faders;
-    findAll(v, faders);
-    REQUIRE(faders.size() == 3);                         // the track, the built-in return, the master
-    CHECK(faders[1]->db() == Approx(-6.0));
-    {
-        Mouse mo(*faders[1]);
-        const int h = faders[1]->getHeight();
-        mo.down(pt(20, h / 2)).drag(pt(20, h / 6)).up(pt(20, h / 6));
-    }
-    CHECK(m.project().returns[0].gainDb > -6.0);
-    CHECK(m.project().returns[0].params.at("mix") == Approx(1.0));   // the effect's settings are kept
-    m.undo();
-    CHECK(m.project().returns[0].gainDb == Approx(-6.0));            // one gesture, one undo step
-}
-
 TEST_CASE("transport: the project's key is shown and follows the document", "[ui][transport][key]") {
     Rig r;
     auto& m = *r.m;
@@ -1544,35 +1324,6 @@ TEST_CASE("transport: the project's key is shown and follows the document", "[ui
     m.undo();
     v.refresh(app::ModelEvent::Document);
     CHECK(keyText() == "A Minor");
-}
-
-TEST_CASE("mixer: a bus (and a track) has a send knob and a target chip for sending to other buses", "[ui][mixer][sends]") {
-    Rig r; r.demo();
-    auto& m = *r.m;
-    m.apply(edit::addTrack(m.project(), project::TrackKind::Bus, "Drum bus"));
-    m.apply(edit::addReturnBus(m.project(), project::SendBus::A));
-    ui::MixerView v(m);
-    v.setSize(1500, 600);
-    v.refresh(app::ModelEvent::Document);
-    const auto drumBus = m.project().tracks[6].uid;       // after the demo's six tracks (the last, "Space", is a bus too)
-    const auto verbId = m.project().tracks[7].id;
-    REQUIRE(m.project().tracks[6].name == "Drum bus");
-    // the knob labelled "Send" on the Drum bus strip: its level edits the send to the chip's target (a bus, never itself)
-    std::vector<ui::Chip*> chips;
-    findAll(v, chips);
-    int targetChips = 0;
-    for (auto* c : chips) if (c->isVisible() && c->getWidth() == 42 && c->getHeight() == 20) ++targetChips;
-    CHECK(targetChips >= 1);
-    // drive it the way the knob does
-    std::vector<ui::Knob*> knobs;
-    findAll(v, knobs);
-    ui::Knob* send = nullptr;
-    for (auto* k : knobs) if (k->isVisible() && k->onChange && k->getParentComponent() && k->getParentComponent()->getName().isEmpty() && k->getAlpha() > 0.0f) { (void)k; }
-    // find the strip by sending through the model and checking the strip follows
-    REQUIRE(m.apply(document::cmd::setBusSend(drumBus, verbId, 0.6)));
-    v.refresh(app::ModelEvent::Document);
-    CHECK(m.project().tracks[6].sends.at(verbId) == Approx(0.6));
-    (void)send;
 }
 
 // ---- the chord resonator's panel ----
@@ -1822,13 +1573,21 @@ TEST_CASE("effect pictures: the EQs and the filter are dragged on a frequency pl
         CHECK(f.param("b3_gain") == Approx(6.0).margin(0.6));
         f.sync();
         const double q0 = f.param("b3_q");
-        juce::MouseWheelDetails w{}; w.deltaY = 1.0f;
-        f.v->mouseWheelMove(m.ev(f.logAt(2000, 6, -18, 18)), w);
-        CHECK(f.param("b3_q") > q0);
-        const double lowGain = f.param("b0_gain");
-        w.deltaY = -1.0f;
-        f.v->mouseWheelMove(m.ev(f.logAt(f.param("b0_freq"), lowGain, -18, 18)), w);     // a shelf has no Q: nothing moves
+        const auto at = f.logAt(f.param("b3_freq"), f.param("b3_gain"), -18, 18);
+        Mouse shift(*f.v, juce::ModifierKeys(juce::ModifierKeys::shiftModifier));        // Shift-drag is the Q
+        shift.down(at).drag({at.x, at.y - 10.0f}).drag({at.x, at.y - 40.0f}).up({at.x, at.y - 40.0f});
+        CHECK(f.param("b3_q") > q0 * 1.8);
+        CHECK(f.param("b3_freq") == Approx(2000.0).margin(60.0));                         // frequency and gain stayed put
+        f.sync();
+        const auto low = f.logAt(f.param("b0_freq"), f.param("b0_gain"), -18, 18);
+        shift.down(low).drag({low.x, low.y - 40.0f}).up({low.x, low.y - 40.0f});          // a shelf has no Q
         CHECK(f.param("b0_q") == 1.0);
+        // the wheel over a node or a knob edits nothing: it is left for the pane to scroll
+        juce::MouseWheelDetails w{}; w.deltaY = 1.0f;
+        const auto gainBefore = f.param("b3_gain"), qBefore = f.param("b3_q");
+        f.v->mouseWheelMove(shift.ev(at), w);
+        CHECK(f.param("b3_gain") == gainBefore);
+        CHECK(f.param("b3_q") == qBefore);
     }
     {   // Filter: the node is the cutoff (sideways) and the resonance (up and down)
         FxRig f("filter");
@@ -2234,4 +1993,582 @@ TEST_CASE("piano roll: copy, cut and paste, tool shortcuts, and painting velocit
     CHECK(vs[1] < vs[2]);
     CHECK(vs[2] < vs[3]);                                                                 // a ramp up along the stroke
     CHECK(vs[3] > 0.8);
+}
+
+TEST_CASE("the mouse wheel never changes a parameter: knobs and choices leave it for the pane to scroll", "[ui][wheel]") {
+    FxRig f("delay");
+    juce::MouseWheelDetails w{}; w.deltaY = 1.0f; w.deltaX = 0.5f;
+    const auto ev = [&](juce::Component& c) { return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), {5.0f, 5.0f}, {}, 0, 0, 0, 0, 0, &c, &c, juce::Time::getCurrentTime(), {5.0f, 5.0f}, juce::Time::getCurrentTime(), 1, false); };
+    for (const char* key : {"fb", "mix", "tone", "time"}) {
+        INFO(key);
+        auto* c = f.v->control(key);
+        REQUIRE(c != nullptr);
+        const double before = f.param(key);
+        c->mouseWheelMove(ev(*c), w);                      // the default handler hands the event to the parent: nothing is edited here
+        f.sync();
+        CHECK(f.param(key) == before);
+    }
+    // a wheel over a panel reaches the chain, which scrolls
+    Rig r; r.demo();
+    const auto track = r.m->project().tracks[1].uid;
+    r.m->selectTrack(track);
+    ui::DeviceChainView v(*r.m);
+    v.setSize(500, 300);
+    v.refresh(app::ModelEvent::Selection);
+    r.m->apply(edit::addDevice(r.m->project(), track, "fx", "delay"));
+    v.refresh(app::ModelEvent::Document);
+    std::vector<ui::Knob*> knobs;
+    findAll(v, knobs);
+    REQUIRE(!knobs.empty());
+    const double before = knobs.back()->value();
+    knobs.back()->mouseWheelMove(ev(*knobs.back()), w);
+    CHECK(knobs.back()->value() == before);
+}
+
+// ---- drum machines: named pads and the kit dropdown (ARCH 29) ----
+
+TEST_CASE("drum machines: pad parameters are labelled with the pad's name, and every kit names its pads", "[appmodel][drumkit]") {
+    CHECK(app::drumKits().size() == 4);
+    CHECK(std::string(app::drumPadName("drum", 3)) == "Closed Hat");
+    CHECK(std::string(app::drumPadName("drum808", 6)) == "Cowbell");
+    CHECK(std::string(app::drumPadName("drum909", 6)) == "Rim Shot");
+    CHECK(std::string(app::drumPadName("drumlinn", 7)) == "Tambourine");
+    CHECK(std::string(app::drumPadName("drum", 9)) == "Snare");                    // the pitch wraps around eight pads
+    for (const auto& k : app::drumKits()) {
+        INFO(k.type);
+        CHECK(app::isDrumKit(k.type));
+        const auto* info = app::findDevice(app::Chain::Instrument, k.type);
+        REQUIRE(info != nullptr);
+        CHECK(info->params.size() == 24);
+    }
+    CHECK_FALSE(app::isDrumKit("poly"));
+    project::DeviceSpec d;
+    d.type = "drum909";
+    CHECK(app::paramLabelFor(d, "p3_decay") == "Closed Hat Decay");
+    CHECK(app::paramLabelFor(d, "p0_tune") == "Kick Tune");
+    CHECK(app::paramLabelFor(d, "p7_level") == "Crash Level");
+    d.type = "drumlinn";
+    CHECK(app::paramLabelFor(d, "p7_decay") == "Tambourine Decay");
+    d.type = "drum";
+    CHECK(app::paramLabelFor(d, "p1_level") == "Snare Level");
+    d.type = "poly";
+    CHECK(app::paramLabelFor(d, "p1_level") != "Snare Level");                       // only the drum machines
+}
+
+TEST_CASE("drum machines: the panel shows the pads by name and a dropdown switches the kit, keeping settings and samples", "[ui][drumkit]") {
+    Rig r; r.demo();
+    const auto track = r.m->project().tracks[0].uid;                                 // the demo's drum track
+    r.m->selectTrack(track);
+    ui::DeviceChainView v(*r.m);
+    v.setSize(1400, 300);
+    v.refresh(app::ModelEvent::Selection);
+    std::vector<ui::DrumKitView*> views;
+    findAll(v, views);
+    REQUIRE(views.size() == 1);
+    CHECK(views[0]->kitLabel().contains("Standard"));
+    CHECK(views[0]->padLabel(0) == "Kick");
+    CHECK(views[0]->padLabel(3) == "Closed Hat");
+    REQUIRE(views[0]->knob(3, "decay") != nullptr);
+    // a knob drives the pad's parameter
+    r.m->apply(document::cmd::setParam(r.m->project().tracks[0].inst.uid, "p0_tune", 3.0));
+    // switch to the 808: the instrument changes, the settings stay, the pads are renamed
+    const auto before = r.m->project().tracks[0].inst.params;
+    views[0]->switchKit("drum808");
+    CHECK(r.m->project().tracks[0].inst.type == "drum808");
+    CHECK(r.m->project().tracks[0].inst.params.at("p0_tune") == 3.0);
+    CHECK(r.m->project().tracks[0].inst.params.size() >= before.size());
+    v.refresh(app::ModelEvent::Document);
+    views.clear();
+    findAll(v, views);
+    REQUIRE(views.size() == 1);
+    CHECK(views[0]->kitLabel().contains("808"));
+    CHECK(views[0]->padLabel(6) == "Cowbell");
+    CHECK(views[0]->knob(0, "tune")->value() == 3.0);
+    // and back, in one undo step each
+    views[0]->switchKit("drumlinn");
+    CHECK(r.m->project().tracks[0].inst.type == "drumlinn");
+    r.m->undo();
+    CHECK(r.m->project().tracks[0].inst.type == "drum808");
+    r.m->undo();
+    CHECK(r.m->project().tracks[0].inst.type == "drum");
+    // the generic knob grid is gone: every knob in the device panel belongs to the pads
+    v.refresh(app::ModelEvent::Document);
+    views.clear();
+    findAll(v, views);
+    REQUIRE(views.size() == 1);
+    std::vector<ui::Knob*> knobs;
+    findAll(*views[0], knobs);
+    CHECK(knobs.size() == 24);
+}
+
+// ---- the trim strips on every effect panel (ARCH 30) ----
+
+TEST_CASE("effect panels: every effect has an input and an output trim with a meter; instruments do not", "[ui][fxtrim]") {
+    Rig r; r.demo();
+    auto& bank = const_cast<engine::MeterBank&>(r.eng.meters());
+    const auto track = r.m->project().tracks[1].uid;
+    r.m->selectTrack(track);
+    r.m->apply(edit::addDevice(r.m->project(), track, "fx", "comp"));
+    const auto comp = r.m->project().tracks[1].fx.back().uid;
+    ui::DeviceChainView v(*r.m);
+    v.setSize(2000, 300);
+    v.refresh(app::ModelEvent::Selection);
+    std::vector<ui::TrimStrip*> strips;
+    findAll(v, strips);
+    const size_t effects = r.m->project().tracks[1].fx.size();
+    CHECK(strips.size() == 2 * effects);                                        // none on the instrument's panel
+    // find the compressor's pair: its slot is the last one
+    ui::TrimStrip *in = nullptr, *out = nullptr;
+    for (size_t i = 0; i + 1 < strips.size(); i += 2) if (i / 2 == effects - 1) { in = strips[i]; out = strips[i + 1]; }
+    REQUIRE(in != nullptr);
+    REQUIRE(out != nullptr);
+    CHECK(in->getX() < out->getX());                                            // input on the far left, output on the far right
+    // dragging sets the trims: up is louder, one gesture is one undo step, double-click resets
+    {
+        Mouse m(*in);
+        m.down(pt(10, 12)).drag(pt(10, 2)).drag(pt(10, -8)).up(pt(10, -8));
+        CHECK(r.m->project().tracks[1].fx.back().inDb.value_or(0.0) == Approx(5.0).margin(0.3));
+        r.m->undo();
+        CHECK_FALSE(r.m->project().tracks[1].fx.back().inDb.has_value());
+        r.m->redo();
+        m.dbl(pt(10, 12));
+        CHECK_FALSE(r.m->project().tracks[1].fx.back().inDb.has_value());       // zero is stored as nothing
+    }
+    {
+        Mouse m(*out);
+        m.down(pt(10, 12)).drag(pt(10, 32)).up(pt(10, 32));
+        CHECK(r.m->project().tracks[1].fx.back().outDb.value_or(0.0) == Approx(-5.0).margin(0.3));
+    }
+    // the meters follow the engine's input and output levels of this effect (its slot among the track's enabled effects)
+    const size_t slot = effects - 1;
+    bank.setFxIo(1, int(slot), 0.5f, 0.25f, 1.0f);
+    v.tick();
+    CHECK(in->level() == Approx(0.5f));
+    CHECK(out->level() == Approx(0.25f));
+    CHECK(r.m->fxInputPeak(comp) == Approx(0.5f));
+    // the wheel over a trim leaves it alone
+    juce::MouseWheelDetails w{}; w.deltaY = 1.0f;
+    const double before = out->value();
+    out->mouseWheelMove(Mouse(*out).ev(pt(10, 12)), w);
+    CHECK(out->value() == before);
+}
+
+TEST_CASE("effect trims: the document keeps them (in and out), saves them and restores them", "[document][fxtrim]") {
+    Rig r; r.demo();
+    const auto track = r.m->project().tracks[1].uid;
+    r.m->apply(edit::addDevice(r.m->project(), track, "fx", "delay"));
+    const auto uid = r.m->project().tracks[1].fx.back().uid;
+    r.m->apply({"device.set", {{"uid", uid}, {"field", "in"}, {"value", -4.5}}});
+    r.m->apply({"device.set", {{"uid", uid}, {"field", "out"}, {"value", 3.0}}});
+    CHECK(r.m->project().tracks[1].fx.back().inDb.value() == -4.5);
+    const auto json = project::deviceToJson(r.m->project().tracks[1].fx.back());
+    CHECK(json.at("in") == -4.5);
+    CHECK(json.at("out") == 3.0);
+    r.m->undo();
+    r.m->undo();
+    CHECK_FALSE(r.m->project().tracks[1].fx.back().inDb.has_value());
+    CHECK_FALSE(r.m->project().tracks[1].fx.back().outDb.has_value());
+    CHECK_FALSE(project::deviceToJson(r.m->project().tracks[1].fx.back()).contains("in"));
+}
+
+// ---- the unified session view: mixing in the header, clips below, the master locked right (ARCH 31) ----
+
+namespace {
+struct SessRig {
+    Rig r;
+    std::unique_ptr<ui::SessionView> v;
+    SessRig(int w = 1400, int h = 700) {
+        r.demo();
+        v = std::make_unique<ui::SessionView>(*r.m);
+        v->setSize(w, h);
+        v->refresh(app::ModelEvent::Document);
+    }
+    int idx(const char* name) { for (size_t i = 0; i < r.m->project().tracks.size(); ++i) if (r.m->project().tracks[i].name == name) return int(i); return -1; }
+    project::Uid uid(const char* name) { return r.m->project().tracks[size_t(idx(name))].uid; }
+};
+}  // namespace
+
+TEST_CASE("session view: hit testing the clip grid under the mixing header, creating clips and deleting them", "[ui][session]") {
+    SessRig f;
+    auto& v = *f.v;
+    using K = ui::SessionView::Hit::Kind;
+    const int hh = v.headerH();
+    const int x1 = v.columnX(0) + ui::SessionView::kTrackW / 2 + 20, y1 = hh + ui::SessionView::kRowH / 2;           // the first track, scene 0
+    CHECK(v.hitAt({x1, y1}).kind == K::Slot);
+    CHECK(v.hitAt({x1, y1}).track == 0);
+    CHECK(v.hitAt({v.columnX(0) + 8, y1}).kind == K::SlotLaunch);
+    CHECK(v.hitAt({8, y1}).kind == K::SceneLaunch);
+    CHECK(v.hitAt({x1, 10}).kind == K::TrackHeader);
+    CHECK(v.hitAt({20, hh + int(f.r.m->project().scenes.size()) * ui::SessionView::kRowH + 10}).kind == K::AddScene);
+    // a bus has no clips: its column is only the mixing section
+    const int bus = f.idx("Space");
+    CHECK(v.hitAt({v.columnX(bus) + 40, y1}).kind == K::None);
+    CHECK(v.hitAt({v.columnX(bus) + 40, 10}).kind == K::TrackHeader);
+    // an empty slot on the Lead track, scene s1: double-click creates a clip
+    const int lead = f.idx("Lead");
+    const std::string key = f.r.m->project().tracks[size_t(lead)].id + "|s1";
+    REQUIRE_FALSE(f.r.m->project().clips.count(key));
+    Mouse(v).dbl(pt(v.columnX(lead) + 60, y1));
+    REQUIRE(f.r.m->project().clips.count(key));
+    CHECK(f.r.m->selection().clip.scene == "s1");
+    CHECK(v.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey)));
+    CHECK_FALSE(f.r.m->project().clips.count(key));
+    f.r.m->undo();
+    CHECK(f.r.m->project().clips.count(key));
+    const size_t scenes = f.r.m->project().scenes.size();
+    Mouse(v).click(pt(20, hh + int(scenes) * ui::SessionView::kRowH + 10));
+    CHECK(f.r.m->project().scenes.size() == scenes + 1);
+}
+
+TEST_CASE("session view: each column has its mixing section, the inputs come before the buses with a line between them", "[ui][session][mixer]") {
+    SessRig f;
+    auto& v = *f.v;
+    CHECK(v.inputCount() == 5);                                                   // drums, bass, chords, lead, pluck
+    CHECK(v.busCount() == 3);                                                     // Space, Send A, Send B
+    CHECK(v.separatorX() > v.columnX(f.idx("Pluck")) + ui::SessionView::kTrackW - 2);
+    CHECK(v.separatorX() < v.columnX(f.idx("Space")) + 2);
+    for (const char* n : {"Drums", "Bass", "Chords", "Lead", "Pluck", "Space", "Send A", "Send B"}) {
+        INFO(n);
+        auto* st = v.strip(f.uid(n));
+        REQUIRE(st != nullptr);
+        CHECK(st->getBounds().getY() == 0);
+        CHECK(st->getHeight() == v.headerH());
+        CHECK(st->getWidth() == ui::SessionView::kTrackW);
+    }
+    // a bus is listed after every input however the document orders them
+    f.r.m->apply(edit::addTrack(f.r.m->project(), project::TrackKind::Synth, "Late"));
+    v.refresh(app::ModelEvent::Document);
+    CHECK(v.inputCount() == 6);
+    CHECK(v.columnOf(f.idx("Late")) < v.columnOf(f.idx("Space")));
+    CHECK(v.columnX(f.idx("Late")) < v.separatorX());
+}
+
+TEST_CASE("session view: the mixing section's fader, pan, mute and solo edit the track, one undo step per gesture", "[ui][session][mixer]") {
+    SessRig f;
+    auto& v = *f.v;
+    auto* st = v.strip(f.uid("Bass"));
+    REQUIRE(st);
+    const int ti = f.idx("Bass");
+    const double before = f.r.m->project().tracks[size_t(ti)].gainDb;
+    {
+        Mouse m(st->fader());
+        const int h = st->fader().getHeight();
+        m.down(pt(15, h / 2)).drag(pt(15, h / 6)).drag(pt(15, 4)).up(pt(15, 4));
+    }
+    CHECK(f.r.m->project().tracks[size_t(ti)].gainDb > before);
+    f.r.m->undo();
+    CHECK(f.r.m->project().tracks[size_t(ti)].gainDb == Approx(before));
+    {
+        Mouse m(st->pan());
+        m.down(pt(st->pan().getWidth() - 4, 6)).up(pt(st->pan().getWidth() - 4, 6));
+        CHECK(f.r.m->project().tracks[size_t(ti)].pan > 0.8);
+        m.dbl(pt(10, 6));
+        CHECK(f.r.m->project().tracks[size_t(ti)].pan == 0.0);
+    }
+    st->mute().mouseUp(Mouse(st->mute()).ev(pt(5, 5)));
+    CHECK(f.r.m->project().tracks[size_t(ti)].mute);
+    st->solo().mouseUp(Mouse(st->solo()).ev(pt(5, 5)));
+    CHECK(f.r.m->project().tracks[size_t(ti)].solo);
+    // clicking a strip selects its track (and clears a master selection)
+    f.r.m->selectMaster();
+    Mouse(*st).click(pt(60, 10));
+    CHECK(f.r.m->selection().track == f.uid("Bass"));
+    CHECK_FALSE(f.r.m->selection().master);
+}
+
+TEST_CASE("session view: record arm and input monitoring are on the strips that can use them", "[ui][session][recording]") {
+    SessRig f;
+    f.r.m->apply(edit::addTrack(f.r.m->project(), project::TrackKind::Audio));
+    const auto audio = f.r.m->project().tracks.back().uid;
+    f.v->refresh(app::ModelEvent::Document);
+    auto* st = f.v->strip(audio);
+    REQUIRE(st);
+    CHECK(st->arm().isVisible());
+    CHECK(st->monitor().isVisible());                                              // an audio track can monitor its input
+    CHECK_FALSE(f.v->strip(f.uid("Bass"))->monitor().isVisible());                  // a synth track cannot
+    CHECK(f.v->strip(f.uid("Bass"))->arm().isVisible());                            // but it records the notes played live
+    CHECK_FALSE(f.v->strip(f.uid("Space"))->arm().isVisible());                     // a bus has neither
+    CHECK_FALSE(f.v->strip(f.uid("Space"))->stop().isVisible());
+    CHECK_FALSE(f.r.m->recording().armed(audio));
+    st->arm().mouseUp(Mouse(st->arm()).ev(pt(5, 5)));
+    CHECK(f.r.m->recording().armed(audio));
+    CHECK_FALSE(f.r.m->monitored(audio));
+    st->monitor().mouseUp(Mouse(st->monitor()).ev(pt(5, 5)));
+    CHECK(f.r.m->monitored(audio));
+    f.r.m->tick();
+    st->arm().mouseUp(Mouse(st->arm()).ev(pt(5, 5)));
+    CHECK_FALSE(f.r.m->recording().armed(audio));
+    // a bus cannot be armed; a synth or drum track can (for notes)
+    f.r.m->recording().arm(f.uid("Space"), true);
+    CHECK_FALSE(f.r.m->recording().anyArmed());
+    f.r.m->recording().arm(f.uid("Drums"), true);
+    CHECK(f.r.m->recording().anyArmed());
+    f.r.m->recording().arm(f.uid("Drums"), false);
+    // REC without an armed track reports instead of starting
+    ui::TransportBar bar(*f.r.m);
+    bar.setSize(1400, 48);
+    std::vector<ui::Chip*> chips;
+    findAll(bar, chips);
+    REQUIRE(chips.size() > 3);
+    ui::Chip* rec = chips[2];   // PLAY, STOP, REC in the order the bar adds them
+    rec->mouseUp(Mouse(*rec).ev(pt(5, 5)));
+    CHECK_FALSE(f.r.m->recording().recording());
+    CHECK(f.r.m->status().find("arm a track first") != std::string::npos);
+    // arming survives, and is dropped when the track is deleted
+    f.r.m->recording().arm(audio, true);
+    f.r.m->apply(edit::removeTrack(audio));
+    CHECK_FALSE(f.r.m->recording().anyArmed());
+}
+
+TEST_CASE("session view: the master fader is locked at the far right however many tracks scroll past, and selects the master chain", "[ui][session][master]") {
+    SessRig f(900, 700);
+    auto& v = *f.v;
+    for (int i = 0; i < 12; ++i) f.r.m->apply(edit::addTrack(f.r.m->project(), project::TrackKind::Synth));
+    v.refresh(app::ModelEvent::Document);
+    const auto where = v.masterBounds();
+    CHECK(where.getRight() == v.getWidth());
+    CHECK(where.getWidth() == ui::SessionView::kMasterW);
+    REQUIRE(v.masterStrip() != nullptr);
+    CHECK(v.masterStrip()->getBounds() == where);
+    // scrolled all the way along: the master has not moved, and the strips under it are clipped away from it
+    v.scrollTo(100000, 0);
+    CHECK(v.scrollX() > 0);
+    CHECK(v.masterStrip()->getBounds() == where);
+    CHECK(v.strip(f.uid("Send B"))->getRight() + ui::SessionView::kSceneW <= v.getWidth() - ui::SessionView::kMasterW + ui::SessionView::kTrackW);
+    v.scrollTo(0, 100000);                                                          // the grid scrolls down; the header and the master stay
+    CHECK(v.masterStrip()->getBounds() == where);
+    CHECK(v.strip(f.uid("Bass"))->getY() == 0);
+    // the master fader edits the master gain
+    {
+        auto& fader = v.masterStrip()->fader();
+        Mouse m(fader);
+        const int h = fader.getHeight();
+        m.down(pt(20, h)).drag(pt(20, h * 2 / 3)).up(pt(20, h * 2 / 3));
+    }
+    CHECK(f.r.m->project().meta.masterGainDb != 0.0);
+    // clicking the master selects the master chain: the device pane shows it, and there is no button for it
+    ui::DeviceChainView chain(*f.r.m);
+    chain.setSize(1200, 300);
+    chain.refresh(app::ModelEvent::Selection);
+    CHECK_FALSE(chain.showingMaster());
+    Mouse(*v.masterStrip()).click(pt(50, 10));
+    CHECK(f.r.m->selection().master);
+    chain.refresh(app::ModelEvent::Selection);
+    CHECK(chain.showingMaster());
+    std::vector<ui::Chip*> chips;
+    findAll(chain, chips);
+    for (auto* c : chips) CHECK(c->text() != "Master chain");
+    f.r.m->selectTrack(f.uid("Bass"));
+    chain.refresh(app::ModelEvent::Selection);
+    CHECK_FALSE(chain.showingMaster());
+}
+
+TEST_CASE("session view: a strip has a send level to every bus, each its own, and a bus can send to the other buses", "[ui][session][sends]") {
+    SessRig f;
+    auto& v = *f.v;
+    auto* bass = v.strip(f.uid("Bass"));
+    REQUIRE(bass);
+    const auto& p = f.r.m->project();
+    std::vector<std::string> buses;
+    for (auto& t : p.tracks) if (t.kind == project::TrackKind::Bus) buses.push_back(t.id);
+    CHECK(bass->sendRows() + bass->hiddenSends() == int(buses.size()));            // a row for each (or the "+n" chip when they do not fit)
+    for (const auto& b : buses) if (auto* s = bass->send(b)) CHECK(s->getHeight() == ui::MixStrip::kSendRowH);
+    // different levels to different buses
+    auto* toA = bass->send(p.tracks[size_t(f.idx("Send A"))].id);
+    auto* toB = bass->send(p.tracks[size_t(f.idx("Send B"))].id);
+    REQUIRE(toA != nullptr);
+    REQUIRE(toB != nullptr);
+    Mouse(*toA).click(pt(toA->getWidth() / 4, 5));
+    Mouse(*toB).click(pt(toB->getWidth() * 3 / 4, 5));
+    const auto& sends = f.r.m->project().tracks[size_t(f.idx("Bass"))].sends;
+    CHECK(sends.at(p.tracks[size_t(f.idx("Send A"))].id) < sends.at(p.tracks[size_t(f.idx("Send B"))].id));
+    Mouse(*toA).dbl(pt(5, 5));                                                      // double-click clears it
+    CHECK_FALSE(f.r.m->project().tracks[size_t(f.idx("Bass"))].sends.count(p.tracks[size_t(f.idx("Send A"))].id));
+    // a bus sends to the others too, but never round to a bus that feeds it
+    auto* sendA = v.strip(f.uid("Send A"));
+    REQUIRE(sendA);
+    const std::string idB = p.tracks[size_t(f.idx("Send B"))].id;
+    REQUIRE(sendA->send(idB) != nullptr);
+    CHECK(sendA->send(p.tracks[size_t(f.idx("Send A"))].id) == nullptr);             // not to itself
+    Mouse(*sendA->send(idB)).click(pt(30, 5));
+    CHECK(f.r.m->project().tracks[size_t(f.idx("Send A"))].sends.count(idB));
+    v.refresh(app::ModelEvent::Document);
+    CHECK(v.strip(f.uid("Send B"))->send(p.tracks[size_t(f.idx("Send A"))].id) == nullptr);      // B -> A would close the loop
+    CHECK(v.strip(f.uid("Send B"))->send(p.tracks[size_t(f.idx("Space"))].id) != nullptr);
+}
+
+TEST_CASE("session view: a bus's output is chosen on its strip; tracks have none", "[ui][session][sends]") {
+    SessRig f;
+    auto* a = f.v->strip(f.uid("Send A"));
+    REQUIRE(a);
+    CHECK(a->out().isVisible());
+    CHECK(a->outLabel().contains("Master"));
+    CHECK_FALSE(f.v->strip(f.uid("Bass"))->out().isVisible());
+    f.r.m->apply(document::cmd::setTrack(f.uid("Send A"), "output", f.r.m->project().tracks[size_t(f.idx("Space"))].id));
+    f.v->refresh(app::ModelEvent::Document);
+    CHECK(a->outLabel().contains("Space"));
+    // a loop is refused, and so is a target that is not a bus
+    CHECK_FALSE(f.r.m->apply(document::cmd::setTrack(f.uid("Space"), "output", f.r.m->project().tracks[size_t(f.idx("Send A"))].id)));
+    CHECK_FALSE(f.r.m->apply(document::cmd::setTrack(f.uid("Send B"), "output", f.r.m->project().tracks[size_t(f.idx("Bass"))].id)));
+    CHECK_FALSE(f.r.m->apply(document::cmd::setTrack(f.uid("Send B"), "output", f.r.m->project().tracks[size_t(f.idx("Send B"))].id)));
+    CHECK(f.r.m->apply(document::cmd::setTrack(f.uid("Send B"), "output", "master")));
+}
+
+TEST_CASE("session view: the mixing header collapses to names and buttons for small windows", "[ui][session][mixer]") {
+    SessRig f;
+    auto& v = *f.v;
+    const int open = v.headerH();
+    v.setMixOpen(false);
+    CHECK(v.headerH() < open);
+    CHECK(v.strip(f.uid("Bass"))->getHeight() == v.headerH());
+    CHECK_FALSE(v.strip(f.uid("Bass"))->fader().isVisible());
+    CHECK(v.strip(f.uid("Bass"))->mute().isVisible());                               // the buttons stay
+    const int y1 = v.headerH() + ui::SessionView::kRowH / 2;
+    CHECK(v.hitAt({v.columnX(0) + 40, y1}).kind == ui::SessionView::Hit::Kind::Slot);   // and the clips come up under it
+    v.setMixOpen(true);
+    CHECK(v.headerH() == open);
+    CHECK(v.strip(f.uid("Bass"))->fader().isVisible());
+}
+
+// ---- the routing matrix ----
+
+namespace {
+struct RoutRig {
+    SessRig s;
+    std::unique_ptr<ui::RoutingView> v;
+    RoutRig() {
+        v = std::make_unique<ui::RoutingView>(*s.r.m);
+        v->setSize(1100, 700);
+        v->refresh(app::ModelEvent::Document);
+    }
+    juce::Point<float> centre(const char* from, const char* to) { return v->cellRect(s.uid(from), std::string(to) == "Master" ? 0 : s.uid(to)).getCentre().toFloat(); }
+    juce::Point<float> corner(const char* from, const char* to) { return v->cornerRect(s.uid(from), std::string(to) == "Master" ? 0 : s.uid(to)).getCentre().toFloat(); }
+    double level(const char* from, const char* to) { return v->sendLevel(s.uid(from), s.uid(to)); }
+};
+}  // namespace
+
+TEST_CASE("routing matrix: every source down the side, every bus and the master across, inputs and buses apart", "[ui][routing]") {
+    RoutRig f;
+    CHECK(f.v->rowCount() == 8);                                                     // five inputs and three buses
+    CHECK(f.v->columnCount() == 4);                                                  // three buses and the master
+    // inputs always output to the master; a bus may output to the master or to another bus
+    CHECK(f.v->isOutput(f.s.uid("Bass"), 0));
+    CHECK_FALSE(f.v->outputAllowed(f.s.uid("Bass"), f.s.uid("Space")));
+    CHECK(f.v->outputAllowed(f.s.uid("Send A"), f.s.uid("Space")));
+    CHECK(f.v->outputAllowed(f.s.uid("Send A"), 0));
+    CHECK_FALSE(f.v->sendAllowed(f.s.uid("Send A"), f.s.uid("Send A")));
+    CHECK(f.v->sendAllowed(f.s.uid("Send A"), f.s.uid("Send B")));
+    CHECK(f.v->sendAllowed(f.s.uid("Bass"), f.s.uid("Send A")));
+    // the cells of the inputs sit above those of the buses, with a gap between the groups
+    CHECK(f.v->cellRect(f.s.uid("Pluck"), 0).getY() < f.v->cellRect(f.s.uid("Space"), 0).getY() - ui::RoutingView::kCellH);
+}
+
+TEST_CASE("routing matrix: click a cell to switch a send on, drag for its level, right-click to clear; a bus has a send to every other bus", "[ui][routing][sends]") {
+    RoutRig f;
+    Mouse m(*f.v);
+    // a click turns it on, a click again turns it off
+    m.click(f.centre("Bass", "Send A"));
+    CHECK(f.level("Bass", "Send A") == Approx(0.6));
+    m.click(f.centre("Bass", "Send A"));
+    CHECK(f.level("Bass", "Send A") == 0.0);
+    // a drag up sets the level, and one gesture is one undo step
+    const auto from = f.centre("Bass", "Send B");
+    m.down(from).drag({from.x, from.y - 10}).drag({from.x, from.y - 40}).up({from.x, from.y - 40});
+    CHECK(f.level("Bass", "Send B") == Approx(0.5).margin(0.02));
+    f.s.r.m->undo();
+    CHECK(f.level("Bass", "Send B") == 0.0);
+    // every bus can have its own level to every other bus
+    m.click(f.centre("Send A", "Send B"));
+    m.click(f.centre("Send A", "Space"));
+    const auto d = f.centre("Send A", "Space");
+    m.down(d).drag({d.x, d.y - 10}).drag({d.x, d.y - 30}).up({d.x, d.y - 30});
+    CHECK(f.level("Send A", "Send B") == Approx(0.6));
+    CHECK(f.level("Send A", "Space") > 0.7);
+    CHECK(f.level("Send A", "Send B") != f.level("Send A", "Space"));
+    // the right button clears
+    Mouse right(*f.v, juce::ModifierKeys(juce::ModifierKeys::rightButtonModifier));
+    right.down(f.centre("Send A", "Send B")).up(f.centre("Send A", "Send B"));
+    CHECK(f.level("Send A", "Send B") == 0.0);
+    // a cell that would close a loop does nothing: Send A now feeds Space, so Space cannot send back to it
+    CHECK_FALSE(f.v->sendAllowed(f.s.uid("Space"), f.s.uid("Send A")));
+    m.click(f.centre("Space", "Send A"));
+    CHECK(f.level("Space", "Send A") == 0.0);
+    // nor does a cell on the diagonal
+    m.click(f.centre("Space", "Space"));
+    CHECK(f.level("Space", "Space") == 0.0);
+}
+
+TEST_CASE("routing matrix: the diamond routes a bus's output to the master or to another bus, never in a loop", "[ui][routing][output]") {
+    RoutRig f;
+    Mouse m(*f.v);
+    const auto& tracks = [&]() -> const std::vector<project::Track>& { return f.s.r.m->project().tracks; };
+    auto outOf = [&](const char* n) { return tracks()[size_t(f.s.idx(n))].output; };
+    CHECK((outOf("Send A").empty() || outOf("Send A") == "master"));
+    CHECK(f.v->isOutput(f.s.uid("Send A"), 0));
+    m.click(f.corner("Send A", "Space"));                                              // Send A -> Space
+    CHECK(outOf("Send A") == tracks()[size_t(f.s.idx("Space"))].id);
+    CHECK(f.v->isOutput(f.s.uid("Send A"), f.s.uid("Space")));
+    CHECK_FALSE(f.v->isOutput(f.s.uid("Send A"), 0));                                  // exactly one output per row
+    // Space can no longer be routed into Send A (it would loop), nor can its send go there
+    CHECK_FALSE(f.v->outputAllowed(f.s.uid("Space"), f.s.uid("Send A")));
+    m.click(f.corner("Space", "Send A"));
+    CHECK((outOf("Space").empty() || outOf("Space") == "master"));
+    // chain: Space -> Send B -> Master; and back to the master with a click
+    m.click(f.corner("Space", "Send B"));
+    CHECK(outOf("Space") == tracks()[size_t(f.s.idx("Send B"))].id);
+    m.click(f.corner("Send A", "Master"));
+    CHECK(outOf("Send A") == "master");
+    // an input's output is always the master and its diamond there cannot be moved
+    m.click(f.corner("Bass", "Master"));
+    CHECK(f.v->isOutput(f.s.uid("Bass"), 0));
+    // hovering says what a cell does
+    m.down(f.centre("Send A", "Send B")).up(f.centre("Send A", "Send B"));
+    f.v->mouseMove(m.ev(f.centre("Send A", "Send B")));
+    CHECK(f.v->hoverText().contains("Send A"));
+    CHECK(f.v->hoverText().contains("Send B"));
+}
+
+TEST_CASE("routing matrix: the wheel scrolls it and never edits a send", "[ui][routing][wheel]") {
+    RoutRig f;
+    f.v->setSize(1100, 260);
+    f.v->refresh(app::ModelEvent::Document);
+    juce::MouseWheelDetails w{}; w.deltaY = -1.0f;
+    const auto before = f.s.r.m->project().tracks[size_t(f.s.idx("Bass"))].sends;
+    f.v->mouseWheelMove(Mouse(*f.v).ev(f.centre("Bass", "Send A")), w);
+    CHECK(f.s.r.m->project().tracks[size_t(f.s.idx("Bass"))].sends == before);
+    CHECK(f.v->scrollY() > 0);                                                         // a pane scrolled
+}
+
+TEST_CASE("sessions start with Send A (a reverb) and Send B (a ping pong) as ordinary buses; older sends fold into per-bus sends", "[appmodel][sends]") {
+    struct Fresh { engine::Engine eng; std::unique_ptr<app::AppModel> m; Fresh() { eng.prepare(48000.0); m = std::make_unique<app::AppModel>(eng, 48000.0); } } r;   // not blank: what a new session is
+    const auto& p = r.m->project();
+    REQUIRE(p.tracks.size() == 2);
+    CHECK(p.tracks[0].name == "Send A");
+    CHECK(p.tracks[1].name == "Send B");
+    for (auto& t : p.tracks) { CHECK(t.kind == project::TrackKind::Bus); CHECK(t.send == project::SendBus::None); }      // plain buses: no letter
+    CHECK(p.tracks[0].fx.at(0).type == "reverb");
+    CHECK(p.tracks[1].fx.at(0).type == "pingpong");
+    // a new project too
+    r.m->apply(edit::addTrack(r.m->project(), project::TrackKind::Synth));
+    r.m->newProject();
+    CHECK(r.m->project().tracks.size() == 2);
+    // legacy: a project with sendA/sendB knobs and letter buses (or built-in returns) becomes per-bus sends on plain buses
+    project::Project old;
+    project::Track a; a.id = "t1"; a.name = "Lead"; a.sendA = 0.3; a.sendB = 0.5;
+    project::Track bus; bus.id = "t2"; bus.name = "Return A"; bus.kind = project::TrackKind::Bus; bus.send = project::SendBus::A;
+    project::Return ret; ret.id = "r1"; ret.name = "Echo"; ret.fxType = "delay"; ret.gainDb = -3.0; ret.params["mix"] = 1.0;
+    old.tracks = {a, bus};
+    old.returns = {ret, ret};
+    edit::migrateLegacySends(old);
+    REQUIRE(old.tracks.size() == 4);                                                       // the two returns became buses
+    CHECK(old.returns.empty());
+    CHECK(old.tracks[1].send == project::SendBus::None);
+    CHECK(old.tracks[0].sendA == 0.0);
+    CHECK(old.tracks[0].sendB == 0.0);
+    CHECK(old.tracks[0].sends.at("t2") == Approx(0.3));                                     // send A went to the letter bus
+    CHECK(old.tracks[0].sends.size() == 2);                                                 // send B to the bus made from the second return
+    CHECK(old.tracks[3].fx.at(0).type == "delay");
+    CHECK(old.tracks[3].gainDb == Approx(-3.0));
+    edit::migrateLegacySends(old);                                                          // idempotent
+    CHECK(old.tracks.size() == 4);
 }

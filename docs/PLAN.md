@@ -414,3 +414,7 @@ Done: a graphic panel for every audio effect (ARCH 27), phase and shape on every
 
 Done: the note editor now has Select, Draw, Paint, Erase, Slice and Chord tools, snap with a magnet and Alt bypass, triplets, key highlighting and snapping, ghost notes, an edit menu with note operations, clipboard, velocity painting, resize from the left, copy-drag and axis lock (ARCH 28), researched against Ableton's note editor and FL Studio's piano roll (the Ableton manual page could not be fetched, so its details come from search summaries and memory). Not verified: the editor has been driven by synthetic mouse events and looked at in headless screenshots only; fold, note mute and a properties dialog are not built.
 
+### Session and mixer in one view, buses and routing (2026-11-19)
+
+Done: the mixer folded into the session view (mixing header per track, master locked at the right, inputs and buses apart), default Send A/Send B buses, one bus-send mechanism with legacy sends folded in, bus output routing with loop checks, the routing matrix, and the master chain selected from the master fader (ARCH 31). Not verified: the unified view and the matrix have been looked at in headless screenshots and driven by synthetic mouse events, not used for a session; a wide project (many tracks and buses) has been checked for layout in tests, not by eye. The send bars show the first few buses that fit and a "+n" chip for the rest, which opens the matrix.
+

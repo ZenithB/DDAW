@@ -6,9 +6,9 @@
 #include "app/ui/ControllerInput.h"
 #include "app/ui/DeviceChainView.h"
 #include "app/ui/LiveInput.h"
-#include "app/ui/MixerView.h"
 #include "app/ui/ModulationPanel.h"
 #include "app/ui/MorphPanel.h"
+#include "app/ui/RoutingView.h"
 #include "app/ui/SessionView.h"
 #include "app/ui/TrackingPanel.h"
 #include "app/ui/TransportBar.h"
@@ -31,7 +31,7 @@ public:
     LiveInput& liveInput() { return live_; }
     ControllerInput& controllers() { return controllers_; }
 
-    enum class MainTab { Session, Arrangement, Mixer };
+    enum class MainTab { Session, Arrangement, Routing };
     enum class DetailTab { Clip, Devices, Input, Modulation, AudioRate, Morph };
     void showMain(MainTab);
     void showDetail(DetailTab);
@@ -59,7 +59,7 @@ private:
     BrowserPanel browser_;
     SessionView session_;
     ArrangementView arrangement_;
-    MixerView mixer_;
+    RoutingView routing_;
     ClipEditor clip_;
     DeviceChainView devices_;
     TrackingPanel input_;

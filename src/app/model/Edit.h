@@ -39,6 +39,17 @@ Command removeTrack(Uid uid);
 // A send/return bus (the destination of the tracks' A or B send knobs): a bus track marked `send` with a fully wet effect,
 // a reverb for A and a delay for B. The letter must be free (hasReturn).
 Command addReturnBus(const Project& p, project::SendBus which);
+
+// Every session starts with two send buses, "Send A" (a reverb) and "Send B" (a ping pong), ordinary buses like any other: a track or a
+// bus sends to them with a per-bus send level (`track.send`). Adds them to a project that is being built (before it becomes a document).
+void addDefaultSends(Project& p);
+Command addSendBus(const Project& p, const std::string& name, const std::string& fxType);     // one more such bus, as an undoable command
+// The older sendA / sendB knobs and built-in returns are folded into ordinary buses and per-bus sends, so there is one mechanism: a
+// letter bus (A, B) becomes a plain bus and the tracks' sendA / sendB become sends to it; a project's built-in returns (imported
+// projects) become buses with the effect and level of the return. The feedback bus (F) is left as it is. Idempotent.
+void migrateLegacySends(Project& p);
+// The buses `uid` may be routed to as its output (not itself, and none that already feeds it: that would be a loop). Master is always allowed.
+std::vector<const project::Track*> outputTargets(const Project& p, Uid uid);
 bool hasReturn(const Project& p, project::SendBus which);
 // The buses a track or bus can send to: every bus but itself, and (for a bus) none that already leads back to it.
 std::vector<const project::Track*> sendTargets(const Project& p, Uid src);

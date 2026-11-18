@@ -7,16 +7,103 @@ namespace ddaw::ui {
 
 using Kind = SessionView::Hit::Kind;
 
-juce::Rectangle<int> SessionView::headerRect(int t) const { return {kSceneW + t * kTrackW - scrollX_, 0, kTrackW, kHeaderH}; }
-juce::Rectangle<int> SessionView::slotRect(int t, int s) const { return {kSceneW + t * kTrackW - scrollX_, kHeaderH + s * kRowH - scrollY_, kTrackW, kRowH}; }
+// A plain parent that clips its children: the strips scroll sideways under the scene column and above the master.
+class SessionView::Host : public juce::Component {
+public:
+    Host() { setInterceptsMouseClicks(false, true); }
+};
 
-void SessionView::clampScroll() {
-    const int contentW = kSceneW + trackCount() * kTrackW + kAddW, contentH = kHeaderH + (sceneCount() + 1) * kRowH;
-    scrollX_ = juce::jlimit(0, std::max(0, contentW - getWidth()), scrollX_);
-    scrollY_ = juce::jlimit(0, std::max(0, contentH - getHeight()), scrollY_);
+SessionView::SessionView(app::AppModel& m) : View(m) {
+    setWantsKeyboardFocus(true);
+    host_ = std::make_unique<Host>();
+    addAndMakeVisible(*host_);
+    master_ = std::make_unique<MixStrip>(model, 0, MixStrip::Role::Master, 0);
+    addAndMakeVisible(*master_);
+    addAndMakeVisible(mixToggle_);
+    addAndMakeVisible(routing_);
+    mixToggle_.setToggleable(true);
+    mixToggle_.setOn(true);
+    mixToggle_.onToggle = [this](bool on) { setMixOpen(on); };
+    routing_.onClick = [this] { if (onRouting) onRouting(); };
+    rebuildStrips();
+}
+SessionView::~SessionView() = default;
+
+MixStrip* SessionView::strip(project::Uid uid) { const auto it = strips_.find(uid); return it == strips_.end() ? nullptr : it->second.get(); }
+
+int SessionView::columnX(int t) const {
+    const int c = columnOf(t);
+    const bool sep = nInputs_ > 0 && busCount() > 0;
+    return kSceneW + c * kTrackW + (sep && c >= nInputs_ ? kSepW : 0) - scrollX_;
+}
+int SessionView::separatorX() const { return nInputs_ > 0 && busCount() > 0 ? kSceneW + nInputs_ * kTrackW + kSepW / 2 - scrollX_ : -1; }
+juce::Rectangle<int> SessionView::slotRect(int t, int s) const { return {columnX(t), headerH() + s * kRowH - scrollY_, kTrackW, kRowH}; }
+
+void SessionView::setMixOpen(bool open) {
+    mixOpen_ = open;
+    mixToggle_.setOn(open);
+    for (auto& [uid, st] : strips_) { (void)uid; st->setCompact(!open); }
+    master_->setCompact(!open);
+    clampScroll();
+    layoutStrips();
+    repaint();
 }
 
-void SessionView::refresh(app::ModelEvent) { clampScroll(); repaint(); }
+void SessionView::rebuildStrips() {
+    const auto& p = model.project();
+    order_.clear();
+    col_.assign(p.tracks.size(), -1);
+    for (size_t i = 0; i < p.tracks.size(); ++i) if (p.tracks[i].kind != project::TrackKind::Bus) order_.push_back(int(i));
+    nInputs_ = int(order_.size());
+    for (size_t i = 0; i < p.tracks.size(); ++i) if (p.tracks[i].kind == project::TrackKind::Bus) order_.push_back(int(i));
+    for (size_t c = 0; c < order_.size(); ++c) col_[size_t(order_[c])] = int(c);
+    std::vector<std::pair<project::Uid, int>> now;
+    for (int i : order_) now.push_back({p.tracks[size_t(i)].uid, p.tracks[size_t(i)].kind == project::TrackKind::Bus ? 1 : 0});
+    if (now != key_) {
+        key_ = now;
+        strips_.clear();
+        for (int i : order_) {
+            const auto& t = p.tracks[size_t(i)];
+            auto st = std::make_unique<MixStrip>(model, t.uid, t.kind == project::TrackKind::Bus ? MixStrip::Role::Bus : MixStrip::Role::Track, size_t(i));
+            st->onContext = [this, uid = t.uid](project::Uid u) {
+                if (u == 0) { if (onRouting) onRouting(); return; }                      // the "+n" chip: the rest of the sends are in the matrix
+                const auto& pr = model.project();
+                for (size_t k = 0; k < pr.tracks.size(); ++k) if (pr.tracks[k].uid == uid) { Hit h; h.kind = Kind::TrackHeader; h.track = int(k); contextMenu(h); return; }
+            };
+            st->setCompact(!mixOpen_);
+            host_->addAndMakeVisible(*st);
+            strips_[t.uid] = std::move(st);
+        }
+    }
+    for (auto& [uid, st] : strips_) { (void)uid; st->sync(); }
+    master_->sync();
+}
+
+void SessionView::layoutStrips() {
+    host_->setBounds(kSceneW, 0, std::max(0, getWidth() - kSceneW - kMasterW), headerH());
+    for (size_t i = 0; i < model.project().tracks.size(); ++i)
+        if (auto* st = strip(model.project().tracks[i].uid)) st->setBounds(columnX(int(i)) - kSceneW, 0, kTrackW, headerH());
+    master_->setBounds(masterBounds());
+    mixToggle_.setBounds(6, 4, 44, 20);
+    routing_.setBounds(54, 4, 46, 20);
+}
+
+void SessionView::resized() { clampScroll(); layoutStrips(); }
+
+void SessionView::clampScroll() {
+    const bool sep = nInputs_ > 0 && busCount() > 0;
+    const int contentW = int(order_.size()) * kTrackW + (sep ? kSepW : 0) + kAddW, viewW = std::max(0, getWidth() - kSceneW - kMasterW);
+    const int contentH = (sceneCount() + 1) * kRowH, viewH = std::max(0, getHeight() - headerH());
+    scrollX_ = juce::jlimit(0, std::max(0, contentW - viewW), scrollX_);
+    scrollY_ = juce::jlimit(0, std::max(0, contentH - viewH), scrollY_);
+}
+
+void SessionView::refresh(app::ModelEvent) {
+    rebuildStrips();
+    clampScroll();
+    layoutStrips();
+    repaint();
+}
 
 void SessionView::tick() {
     const auto m = model.meters();
@@ -26,7 +113,9 @@ void SessionView::tick() {
     for (int i = 0; i < n; ++i) {
         now[size_t(i)] = m.trackScene[i];
         q[size_t(i)] = m.trackScene[i] >= 0 && m.trackAnchor[i] > m.playheadTicks + 1.0 && m.playing;
+        if (auto* st = strip(model.project().tracks[size_t(i)].uid)) st->setPeak(m.trackPeak[i]);
     }
+    master_->setPeak(m.masterPeak);
     if (now != playing_ || q != queued_ || (std::any_of(q.begin(), q.end(), [](bool b) { return b; }))) {
         playing_ = std::move(now);
         queued_ = std::move(q);
@@ -37,19 +126,20 @@ void SessionView::tick() {
 void SessionView::paint(juce::Graphics& g) {
     const auto& p = model.project();
     g.fillAll(col::bg);
-    const int nT = trackCount(), nS = sceneCount();
+    const int nT = trackCount(), nS = sceneCount(), hh = headerH();
     const auto& sel = model.selection();
     const bool flash = (juce::Time::getMillisecondCounter() / 250) % 2 == 0;
 
     // ---- grid ----
     {
         juce::Graphics::ScopedSaveState ss(g);
-        g.reduceClipRegion(kSceneW, kHeaderH, getWidth() - kSceneW, getHeight() - kHeaderH);
+        g.reduceClipRegion(kSceneW, hh, std::max(0, getWidth() - kSceneW - kMasterW), getHeight() - hh);
         for (int s = 0; s < nS; ++s)
             for (int t = 0; t < nT; ++t) {
                 const auto& tr = p.tracks[size_t(t)];
+                if (tr.kind == project::TrackKind::Bus) continue;                        // a bus has no clips: its column is only the mixing section
                 auto r = slotRect(t, s);
-                if (r.getRight() < kSceneW || r.getX() > getWidth() || r.getBottom() < kHeaderH || r.getY() > getHeight()) continue;
+                if (r.getRight() < kSceneW || r.getX() > getWidth() || r.getBottom() < hh || r.getY() > getHeight()) continue;
                 auto inner = r.reduced(2, 2).toFloat();
                 const auto it = p.clips.find(tr.id + "|" + p.scenes[size_t(s)]);
                 const bool hasClip = it != p.clips.end();
@@ -107,11 +197,11 @@ void SessionView::paint(juce::Graphics& g) {
     // ---- scene column ----
     {
         juce::Graphics::ScopedSaveState ss(g);
-        g.reduceClipRegion(0, kHeaderH, kSceneW, getHeight() - kHeaderH);
+        g.reduceClipRegion(0, hh, kSceneW, getHeight() - hh);
         g.setColour(col::panel);
-        g.fillRect(0, kHeaderH, kSceneW, getHeight());
+        g.fillRect(0, hh, kSceneW, getHeight());
         for (int s = 0; s < nS; ++s) {
-            const int y = kHeaderH + s * kRowH - scrollY_;
+            const int y = hh + s * kRowH - scrollY_;
             auto r = juce::Rectangle<float>(4.0f, float(y) + 2, kSceneW - 8.0f, kRowH - 4.0f);
             fillRounded(g, r, col::panel2, 3.0f);
             juce::Path tri;
@@ -122,7 +212,7 @@ void SessionView::paint(juce::Graphics& g) {
             g.setFont(uiFont(12.0f));
             g.drawText(juce::String(p.scenes[size_t(s)]), r.withTrimmedLeft(26).toNearestInt(), juce::Justification::centredLeft, true);
         }
-        const int y = kHeaderH + nS * kRowH - scrollY_;
+        const int y = hh + nS * kRowH - scrollY_;
         auto r = juce::Rectangle<float>(4.0f, float(y) + 2, kSceneW - 8.0f, kRowH - 4.0f);
         g.setColour(col::faint);
         g.drawRoundedRectangle(r, 3.0f, 1.0f);
@@ -130,101 +220,98 @@ void SessionView::paint(juce::Graphics& g) {
         g.drawText("+ Scene", r.toNearestInt(), juce::Justification::centred);
     }
 
-    // ---- track headers ----
+
+    // ---- scene column ----
     {
         juce::Graphics::ScopedSaveState ss(g);
-        g.reduceClipRegion(kSceneW, 0, getWidth() - kSceneW, kHeaderH);
+        g.reduceClipRegion(0, hh, kSceneW, getHeight() - hh);
         g.setColour(col::panel);
-        g.fillRect(0, 0, getWidth(), kHeaderH);
-        for (int t = 0; t < nT; ++t) {
-            const auto& tr = p.tracks[size_t(t)];
-            auto r = headerRect(t).reduced(2, 4).toFloat();
-            const auto c = trackColour(size_t(t));
-            fillRounded(g, r, sel.track == tr.uid ? col::raised.brighter(0.1f) : col::panel2, 3.0f);
-            g.setColour(c);
-            g.fillRoundedRectangle(r.removeFromTop(4.0f), 2.0f);
+        g.fillRect(0, hh, kSceneW, getHeight());
+        for (int s = 0; s < nS; ++s) {
+            const int y = hh + s * kRowH - scrollY_;
+            auto r = juce::Rectangle<float>(4.0f, float(y) + 2, kSceneW - 8.0f, kRowH - 4.0f);
+            fillRounded(g, r, col::panel2, 3.0f);
+            juce::Path tri;
+            tri.addTriangle(r.getX() + 8, r.getCentreY() - 6, r.getX() + 8, r.getCentreY() + 6, r.getX() + 18, r.getCentreY());
+            g.setColour(col::play);
+            g.fillPath(tri);
             g.setColour(col::text);
-            g.setFont(uiFont(12.5f, true));
-            g.drawText(juce::String(tr.name), r.removeFromTop(20.0f).reduced(6, 0).toNearestInt(), juce::Justification::centredLeft, true);
-            g.setColour(col::dim);
-            g.setFont(uiFont(10.5f));
-            const char* kind = tr.kind == project::TrackKind::Drum ? "drum" : tr.kind == project::TrackKind::Audio ? "audio" : tr.kind == project::TrackKind::Bus ? "bus" : tr.inst.type.c_str();
-            g.drawText(kind, r.removeFromTop(14.0f).reduced(6, 0).toNearestInt(), juce::Justification::centredLeft, true);
-            auto btn = r.reduced(4, 2);
-            auto button = [&](int i) { return juce::Rectangle<float>(btn.getX() + i * 28.0f, btn.getY(), 24.0f, btn.getHeight()); };
-            const auto stop = button(0), mute = button(1), solo = button(2), arm = button(3);
-            fillRounded(g, stop, col::raised, 3.0f);
-            g.setColour(col::dim);
-            g.fillRect(juce::Rectangle<float>(8, 8).withCentre(stop.getCentre()));
-            fillRounded(g, mute, tr.mute ? col::queued : col::raised, 3.0f);
-            fillRounded(g, solo, tr.solo ? col::accent : col::raised, 3.0f);
-            g.setFont(uiFont(11.0f, true));
-            g.setColour(tr.mute ? col::black : col::dim);
-            g.drawText("M", mute.toNearestInt(), juce::Justification::centred);
-            g.setColour(tr.solo ? col::black : col::dim);
-            g.drawText("S", solo.toNearestInt(), juce::Justification::centred);
-            if (tr.kind != project::TrackKind::Bus) {
-                const bool on = model.recording().armed(tr.uid);
-                fillRounded(g, arm, on ? col::rec : col::raised, 3.0f);
-                g.setColour(on ? col::black : col::rec);
-                g.fillEllipse(juce::Rectangle<float>(9, 9).withCentre(arm.getCentre()));
-            }
+            g.setFont(uiFont(12.0f));
+            g.drawText(juce::String(p.scenes[size_t(s)]), r.withTrimmedLeft(26).toNearestInt(), juce::Justification::centredLeft, true);
         }
-        auto add = juce::Rectangle<float>(float(kSceneW + nT * kTrackW - scrollX_ + 4), 8.0f, kAddW - 8.0f, kHeaderH - 16.0f);
+        const int y = hh + nS * kRowH - scrollY_;
+        auto r = juce::Rectangle<float>(4.0f, float(y) + 2, kSceneW - 8.0f, kRowH - 4.0f);
+        g.setColour(col::faint);
+        g.drawRoundedRectangle(r, 3.0f, 1.0f);
+        g.setFont(uiFont(12.0f));
+        g.drawText("+ Scene", r.toNearestInt(), juce::Justification::centred);
+    }
+
+    // ---- the header band behind the strips, the add-track cell, and the master column ----
+    g.setColour(col::panel);
+    g.fillRect(0, 0, getWidth(), hh);
+    {
+        juce::Graphics::ScopedSaveState ss(g);
+        g.reduceClipRegion(kSceneW, 0, std::max(0, getWidth() - kSceneW - kMasterW), getHeight());
+        const bool sep = nInputs_ > 0 && busCount() > 0;
+        const int endX = kSceneW + int(order_.size()) * kTrackW + (sep ? kSepW : 0) - scrollX_;
+        auto add = juce::Rectangle<float>(float(endX + 4), 8.0f, kAddW - 8.0f, 36.0f);
         g.setColour(col::faint);
         g.drawRoundedRectangle(add, 3.0f, 1.0f);
         g.setFont(uiFont(16.0f));
         g.drawText("+", add.toNearestInt(), juce::Justification::centred);
+        // buses have no clips: their columns are tinted so the grid reads as inputs | buses
+        for (int t = 0; t < nT; ++t) if (p.tracks[size_t(t)].kind == project::TrackKind::Bus) {
+            g.setColour(col::panel.withAlpha(0.35f));
+            g.fillRect(columnX(t), hh, kTrackW, getHeight() - hh);
+        }
+        if (const int sx = separatorX(); sx >= 0) {                                  // the line between the input channels and the buses
+            g.setColour(col::gridBar.brighter(0.6f));
+            g.fillRect(sx - 1, 0, 2, getHeight());
+            g.setColour(col::faint);
+            g.setFont(uiFont(9.0f, true));
+            g.drawText("INPUTS", juce::Rectangle<int>(sx - kSepW / 2 - 44, hh + 2, 42, 12), juce::Justification::centredRight);
+            g.drawText("BUSES", juce::Rectangle<int>(sx + kSepW / 2 + 2, hh + 2, 42, 12), juce::Justification::centredLeft);
+        }
     }
     g.setColour(col::panel);
-    g.fillRect(0, 0, kSceneW, kHeaderH);
+    g.fillRect(getWidth() - kMasterW, hh, kMasterW, getHeight() - hh);
     g.setColour(col::line);
+    g.drawVerticalLine(getWidth() - kMasterW, 0, float(getHeight()));
     g.drawVerticalLine(kSceneW - 1, 0, float(getHeight()));
-    g.drawHorizontalLine(kHeaderH - 1, 0, float(getWidth()));
+    g.drawHorizontalLine(hh - 1, 0, float(getWidth()));
     if (nT == 0) {
         g.setColour(col::dim);
         g.setFont(uiFont(14.0f));
-        g.drawText("Add a track to begin  (+)", getLocalBounds().withTrimmedTop(kHeaderH), juce::Justification::centred);
+        g.drawText("Add a track to begin  (+)", getLocalBounds().withTrimmedTop(hh), juce::Justification::centred);
     }
 }
 
 SessionView::Hit SessionView::hitAt(juce::Point<int> pt) const {
-    const int nT = trackCount(), nS = sceneCount();
-    const auto& p = model.project();
+    const int nT = trackCount(), nS = sceneCount(), hh = headerH();
     Hit h;
-    if (pt.y < kHeaderH) {
-        if (pt.x < kSceneW) return h;
-        for (int t = 0; t < nT; ++t) {
-            auto r = headerRect(t).reduced(2, 4);
-            if (!r.contains(pt)) continue;
-            h.track = t;
-            h.kind = Kind::TrackHeader;
-            const int by = r.getBottom() - 24, bx = r.getX() + 4;
-            if (pt.y >= by) {
-                const int i = (pt.x - bx) / 28;
-                if (pt.x >= bx && (pt.x - bx) % 28 < 24) {
-                    if (i == 0) h.kind = Kind::TrackStop;
-                    else if (i == 1) h.kind = Kind::Mute;
-                    else if (i == 2) h.kind = Kind::Solo;
-                    else if (i == 3 && p.tracks[size_t(t)].kind != project::TrackKind::Bus) h.kind = Kind::Arm;
-                }
-            }
-            return h;
-        }
-        if (juce::Rectangle<int>(kSceneW + nT * kTrackW - scrollX_, 0, kAddW, kHeaderH).contains(pt)) h.kind = Kind::AddTrack;
+    if (pt.y < hh) {
+        if (pt.x < kSceneW || pt.x >= getWidth() - kMasterW) return h;
+        for (int t = 0; t < nT; ++t) if (juce::Rectangle<int>(columnX(t), 0, kTrackW, hh).contains(pt)) { h.track = t; h.kind = Kind::TrackHeader; return h; }
+        const bool sep = nInputs_ > 0 && busCount() > 0;
+        const int endX = kSceneW + int(order_.size()) * kTrackW + (sep ? kSepW : 0) - scrollX_;
+        if (juce::Rectangle<int>(endX, 0, kAddW, hh).contains(pt)) h.kind = Kind::AddTrack;
         return h;
     }
     if (pt.x < kSceneW) {
-        const int s = (pt.y - kHeaderH + scrollY_) / kRowH;
-        if (pt.y - kHeaderH + scrollY_ < 0) return h;
+        const int s = (pt.y - hh + scrollY_) / kRowH;
+        if (pt.y - hh + scrollY_ < 0) return h;
         if (s < nS) { h.scene = s; h.kind = pt.x < 28 ? Kind::SceneLaunch : Kind::SceneHeader; }
         else if (s == nS) h.kind = Kind::AddScene;
         return h;
     }
-    const int t = (pt.x - kSceneW + scrollX_) / kTrackW, s = (pt.y - kHeaderH + scrollY_) / kRowH;
-    if (pt.x - kSceneW + scrollX_ >= 0 && t < nT && s < nS && pt.y - kHeaderH + scrollY_ >= 0) {
-        h.track = t; h.scene = s;
-        h.kind = pt.x - slotRect(t, s).getX() < 24 ? Kind::SlotLaunch : Kind::Slot;
+    if (pt.x >= getWidth() - kMasterW) return h;
+    const int s = (pt.y - hh + scrollY_) / kRowH;
+    if (pt.y - hh + scrollY_ < 0 || s >= nS) return h;
+    for (int t = 0; t < nT; ++t) {
+        if (model.project().tracks[size_t(t)].kind == project::TrackKind::Bus) continue;
+        const auto r = slotRect(t, s);
+        if (pt.x >= r.getX() && pt.x < r.getRight()) { h.track = t; h.scene = s; h.kind = pt.x - r.getX() < 24 ? Kind::SlotLaunch : Kind::Slot; return h; }
     }
     return h;
 }
@@ -238,10 +325,6 @@ void SessionView::mouseDown(const juce::MouseEvent& e) {
         case Kind::AddTrack: showAddTrackMenu(); break;
         case Kind::AddScene: model.apply(app::edit::addScene(p)); break;
         case Kind::SceneLaunch: model.launchScene(p.scenes[size_t(h.scene)]); break;
-        case Kind::TrackStop: model.stopTrack(p.tracks[size_t(h.track)].id); break;
-        case Kind::Mute: model.apply(document::cmd::setTrack(p.tracks[size_t(h.track)].uid, "mute", !p.tracks[size_t(h.track)].mute)); break;
-        case Kind::Arm: model.recording().arm(p.tracks[size_t(h.track)].uid, !model.recording().armed(p.tracks[size_t(h.track)].uid)); break;
-        case Kind::Solo: model.apply(document::cmd::setTrack(p.tracks[size_t(h.track)].uid, "solo", !p.tracks[size_t(h.track)].solo)); break;
         case Kind::TrackHeader: model.selectTrack(p.tracks[size_t(h.track)].uid); break;
         case Kind::SlotLaunch: {
             const auto& tr = p.tracks[size_t(h.track)];
@@ -271,16 +354,14 @@ void SessionView::mouseDoubleClick(const juce::MouseEvent& e) {
         if (tr.kind == project::TrackKind::Audio || tr.kind == project::TrackKind::Bus) return;
         if (!p.clips.count(tr.id + "|" + sc)) model.apply(app::edit::newSessionClip(tr.uid, sc));
         model.selectClip({tr.uid, sc, ""});
-    } else if (h.kind == Kind::TrackHeader) {
-        const auto uid = p.tracks[size_t(h.track)].uid;
-        promptText("Rename track", p.tracks[size_t(h.track)].name, [this, uid](juce::String n) { if (n.isNotEmpty()) model.apply(document::cmd::setTrack(uid, "name", n.toStdString())); });
     }
 }
 
 void SessionView::mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& w) {
     scrollX_ -= int(w.deltaX * 600.0f);
-    scrollY_ -= int(w.deltaY * 600.0f);
+    scrollY_ -= int(w.deltaY * 600.0f);          // the strips stay: only the clips scroll vertically
     clampScroll();
+    layoutStrips();
     repaint();
 }
 
@@ -316,7 +397,7 @@ void SessionView::showAddTrackMenu() {
 void SessionView::contextMenu(const Hit& h) {
     const auto& p = model.project();
     juce::PopupMenu m;
-    if (h.kind == Kind::TrackHeader || h.kind == Kind::Mute || h.kind == Kind::Solo || h.kind == Kind::TrackStop) {
+    if (h.kind == Kind::TrackHeader) {
         const auto uid = p.tracks[size_t(h.track)].uid;
         m.addItem(1, "Rename...");
         m.addItem(2, "Move left", h.track > 0);

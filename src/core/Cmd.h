@@ -20,6 +20,7 @@ constexpr uint16_t kMorphX = 0, kMorphY = 1;
 constexpr uint8_t  kSlotArate    = 0xFC;    // an audio-rate route field (param = routeIndex * 4 + field)
 constexpr uint16_t kArateDepth = 0, kArateHz = 1;
 constexpr uint16_t kParamOut     = 0xFFFF;  // device output gain (dB), not a ParamSpec
+constexpr uint16_t kParamIn      = 0xFFFE;  // device input gain (dB), not a ParamSpec
 
 // Mixer-slot parameter indices (slot kSlotMixer).
 constexpr uint16_t kMixGain = 0;  // dB; with target kTargetMaster it is the master gain

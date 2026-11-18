@@ -57,6 +57,7 @@ struct DeviceSpec {
     std::string type;
     bool on = true;
     std::map<std::string, double> params;
+    std::optional<double> inDb;         // device input gain (dB): the trim ahead of the device
     std::optional<double> outDb;        // device output gain (dB)
     std::string srcTrack;               // duck: the sidechain source track id
     std::optional<double> srcPitch;     // duck: restrict the trigger to this pitch

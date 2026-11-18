@@ -1,6 +1,6 @@
 // Headless UI snapshots: builds the model on a standalone engine (no audio device), loads a project,
 // and renders the whole window or one view to a PNG. Usage:
-//   ddaw_uishot <out.png> [--project file.json|dir.ddaw] [--demo] [--size WxH] [--main session|arrangement|mixer]
+//   ddaw_uishot <out.png> [--project file.json|dir.ddaw] [--demo] [--size WxH] [--main session|arrangement|routing]
 //               [--detail clip|devices] [--select-track N] [--select-clip track:scene] [--play]
 #include <juce_events/juce_events.h>
 #include <juce_graphics/juce_graphics.h>
@@ -79,7 +79,7 @@ int main(int argc, char** argv) {
     }
     ui::MainComponent main(model);
     main.setSize(w, h);
-    main.showMain(mainTab == "arrangement" ? ui::MainComponent::MainTab::Arrangement : mainTab == "mixer" ? ui::MainComponent::MainTab::Mixer : ui::MainComponent::MainTab::Session);
+    main.showMain(mainTab == "arrangement" ? ui::MainComponent::MainTab::Arrangement : mainTab == "routing" ? ui::MainComponent::MainTab::Routing : ui::MainComponent::MainTab::Session);
     model.setArrangementMode(mainTab == "arrangement");
     if (selTrack >= 0 && size_t(selTrack) < model.project().tracks.size()) model.selectTrack(model.project().tracks[size_t(selTrack)].uid);
     if (!selClip.empty()) {
@@ -135,9 +135,11 @@ int main(int argc, char** argv) {
         model.apply({"binding.insert", {{"index", 1}, {"binding", project::bindingToJson(by)}}});
     }
     if (returns) {
-        model.apply(app::edit::addReturnBus(model.project(), project::SendBus::A));
-        model.apply(app::edit::addReturnBus(model.project(), project::SendBus::B));
-        for (size_t i = 1; i < 4 && i < model.project().tracks.size(); ++i) model.apply(document::cmd::setTrack(model.project().tracks[i].uid, "sendA", 0.25 * double(i)));
+        std::vector<std::string> buses;
+        for (auto& t : model.project().tracks) if (t.kind == project::TrackKind::Bus) buses.push_back(t.id);
+        for (size_t i = 1; i < 4 && i < model.project().tracks.size(); ++i)
+            for (size_t b = 0; b < buses.size() && b < 3; ++b)
+                if (model.project().tracks[i].kind != project::TrackKind::Bus) model.apply(document::cmd::setBusSend(model.project().tracks[i].uid, buses[b], 0.2 * double(i) * double(b + 1)));
     }
     for (const auto& t : fxTypes) if (model.selection().track) model.apply(app::edit::addDevice(model.project(), model.selection().track, "fx", t));
     if (chordres && model.selection().track) {

@@ -38,6 +38,9 @@ std::vector<DeviceInfo> build() {
         {"pluck", "Pluck", "Keys and Plucks", C::Instrument, sp(kInstPluck)},
         {"modal", "Modal", "Keys and Plucks", C::Instrument, sp(kInstModal)},
         {"drum", "Drum Machine", "Drums", C::Instrument, sp(kInstDrum)},
+        {"drum808", "808-style Drums", "Drums", C::Instrument, sp(kInstDrum808)},
+        {"drum909", "909-style Drums", "Drums", C::Instrument, sp(kInstDrum909)},
+        {"drumlinn", "Linn-style Drums", "Drums", C::Instrument, sp(kInstDrumLinn)},
         {"perc", "Percussion", "Drums", C::Instrument, sp(kInstPerc)},
         {"ddsp", "DDSP Instrument", "Tracking", C::Instrument, sp(kInstDdsp)},
         {"follow", "Voice Follower", "Tracking", C::Instrument, sp(kInstFollow)},
@@ -289,7 +292,27 @@ const DeviceInfo* deviceInfoFor(Chain chain, const project::DeviceSpec& d) {
     return slot.get();
 }
 
+bool isDrumKit(std::string_view t) { return t == "drum" || t == "drum808" || t == "drum909" || t == "drumlinn"; }
+
+const char* drumPadName(std::string_view type, int pitch) {
+    static const char* const standard[] = {"Kick", "Snare", "Clap", "Closed Hat", "Open Hat", "Lo Tom", "Perc", "Crash"};
+    static const char* const k808[] = {"Kick", "Snare", "Clap", "Closed Hat", "Open Hat", "Low Tom", "Cowbell", "Cymbal"};
+    static const char* const k909[] = {"Kick", "Snare", "Clap", "Closed Hat", "Open Hat", "Tom", "Rim Shot", "Crash"};
+    static const char* const linn[] = {"Kick", "Snare", "Clap", "Hat", "Open Hat", "Tom", "Cowbell", "Tambourine"};
+    const char* const* n = type == "drum808" ? k808 : type == "drum909" ? k909 : type == "drumlinn" ? linn : standard;
+    return n[((pitch % 8) + 8) % 8];
+}
+
+const std::vector<DrumKitInfo>& drumKits() {
+    static const std::vector<DrumKitInfo> k = {{"drum", "Standard"}, {"drum808", "808-style"}, {"drum909", "909-style"}, {"drumlinn", "Linn-style"}};
+    return k;
+}
+
 std::string paramLabelFor(const project::DeviceSpec& d, std::string_view key) {
+    if (isDrumKit(d.type) && key.size() > 3 && key[0] == 'p' && std::isdigit(static_cast<unsigned char>(key[1])) && key[2] == '_') {   // p3_decay: "Closed Hat Decay"
+        const std::string rest(key.substr(3));
+        return std::string(drumPadName(d.type, key[1] - '0')) + " " + paramLabel(rest);
+    }
     if (d.type == "plugin" && gProvider && gProvider->live(d.uid)) {
         const auto params = gProvider->params(d.uid);
         for (size_t i = 0; i < params.size(); ++i) if (key == params[i].key) return gProvider->paramName(d.uid, i);

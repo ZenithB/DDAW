@@ -40,6 +40,11 @@ void buildDemo(AppModel& m) {
         m.apply(c);
         uid = m.project().tracks.back().uid;
     };
+    {   // the song names its own tracks t1..: clear the two default send buses first and add them back after it
+        std::vector<project::Uid> old;
+        for (auto& t : m.project().tracks) old.push_back(t.uid);
+        for (auto uid : old) m.apply(edit::removeTrack(uid));
+    }
     m.apply(document::cmd::setMeta("title", "Demo song"));
     m.apply(document::cmd::setMeta("bpm", 118.0));
     project::Uid drums, bass, chords, lead, pluck, bus;
@@ -90,6 +95,8 @@ void buildDemo(AppModel& m) {
     m.apply(document::cmd::setTrack(lead, "gain", -6.0));
     m.apply(document::cmd::setTrack(pluck, "pan", 0.3));
     m.apply(document::cmd::setTrack(lead, "pan", -0.25));
+    m.apply(edit::addSendBus(m.project(), "Send A", "reverb"));
+    m.apply(edit::addSendBus(m.project(), "Send B", "pingpong"));
     m.document().clearHistory();
     m.selectTrack(chords);
 }

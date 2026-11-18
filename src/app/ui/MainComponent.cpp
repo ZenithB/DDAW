@@ -3,13 +3,14 @@
 namespace ddaw::ui {
 
 MainComponent::MainComponent(app::AppModel& m)
-    : model_(m), live_(m), controllers_(m, live_), transport_(m), browser_(m), session_(m), arrangement_(m), mixer_(m), clip_(m), devices_(m), input_(m, live_), mod_(m), arate_(m), morph_(m, &controllers_) {
-    for (juce::Component* c : std::initializer_list<juce::Component*>{&transport_, &browser_, &session_, &arrangement_, &mixer_, &clip_, &devices_, &input_, &mod_, &arate_, &morph_})
+    : model_(m), live_(m), controllers_(m, live_), transport_(m), browser_(m), session_(m), arrangement_(m), routing_(m), clip_(m), devices_(m), input_(m, live_), mod_(m), arate_(m), morph_(m, &controllers_) {
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&transport_, &browser_, &session_, &arrangement_, &routing_, &clip_, &devices_, &input_, &mod_, &arate_, &morph_})
         addAndMakeVisible(c);
     transport_.onAudioSettings = [this] { if (onAudioSettings) onAudioSettings(); };
     listener_ = model_.addListener([this](app::ModelEvent e) { onModel(e); });
     showMain(MainTab::Session);
     showDetail(DetailTab::Devices);
+    session_.onRouting = [this] { showMain(MainTab::Routing); };
     setWantsKeyboardFocus(true);
     startTimerHz(30);
     onModel(app::ModelEvent::Document);
@@ -22,7 +23,7 @@ void MainComponent::onModel(app::ModelEvent e) {
     browser_.refresh(e);
     session_.refresh(e);
     arrangement_.refresh(e);
-    mixer_.refresh(e);
+    routing_.refresh(e);
     clip_.refresh(e);
     devices_.refresh(e);
     input_.refresh(e);
@@ -43,7 +44,7 @@ void MainComponent::timerCallback() {
     transport_.tick();
     if (mainTab_ == MainTab::Session) session_.tick();
     if (mainTab_ == MainTab::Arrangement) arrangement_.tick();
-    if (mainTab_ == MainTab::Mixer) mixer_.tick();
+    if (mainTab_ == MainTab::Routing) routing_.tick();
     if (detailTab_ == DetailTab::Clip) clip_.tick();
     if (detailTab_ == DetailTab::Input) input_.tick();
     if (detailTab_ == DetailTab::Modulation) mod_.tick();
@@ -54,7 +55,7 @@ void MainComponent::showMain(MainTab t) {
     mainTab_ = t;
     session_.setVisible(t == MainTab::Session);
     arrangement_.setVisible(t == MainTab::Arrangement);
-    mixer_.setVisible(t == MainTab::Mixer);
+    routing_.setVisible(t == MainTab::Routing);
     repaint();
 }
 
@@ -87,7 +88,7 @@ void MainComponent::resized() {
     mainStrip_ = r.removeFromTop(kTabH);
     session_.setBounds(r);
     arrangement_.setBounds(r);
-    mixer_.setBounds(r);
+    routing_.setBounds(r);
 }
 
 void MainComponent::paintTabs(juce::Graphics& g, juce::Rectangle<int> strip, const std::vector<juce::String>& names, int active) {
@@ -107,7 +108,7 @@ void MainComponent::paintTabs(juce::Graphics& g, juce::Rectangle<int> strip, con
 
 void MainComponent::paint(juce::Graphics& g) {
     g.fillAll(col::bg);
-    paintTabs(g, mainStrip_, {"Session", "Arrangement", "Mixer"}, int(mainTab_));
+    paintTabs(g, mainStrip_, {"Session", "Arrangement", "Routing"}, int(mainTab_));
     paintTabs(g, detailStrip_, {"Clip", "Devices", "Input", "Modulation", "Audio-rate", "Morph"}, int(detailTab_));
     // detail strip: selected track / clip summary on the right
     {
@@ -137,9 +138,9 @@ void MainComponent::mouseDown(const juce::MouseEvent& e) {
         }
         return -1;
     };
-    if (int i = hitTabs(mainStrip_, {"Session", "Arrangement", "Mixer"}); i >= 0) {
+    if (int i = hitTabs(mainStrip_, {"Session", "Arrangement", "Routing"}); i >= 0) {
         showMain(MainTab(i));
-        if (MainTab(i) != MainTab::Mixer) { model_.setArrangementMode(MainTab(i) == MainTab::Arrangement); model_.notify(app::ModelEvent::Transport); }
+        if (MainTab(i) != MainTab::Routing) { model_.setArrangementMode(MainTab(i) == MainTab::Arrangement); model_.notify(app::ModelEvent::Transport); }
     } else if (int j = hitTabs(detailStrip_, {"Clip", "Devices", "Input", "Modulation", "Audio-rate", "Morph"}); j >= 0) showDetail(DetailTab(j));
 }
 

@@ -2,6 +2,8 @@
 // plugin is needed). Skipped where there is no AudioUnit host.
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+#include "EmptyModel.h"
 #include <cstdio>
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -214,6 +216,7 @@ struct UiRig {
     UiRig() {
         eng.prepare(48000.0);
         m = std::make_unique<app::AppModel>(eng, 48000.0);
+        startEmpty(*m);
         m->setPluginProvider(&host);
         m->apply(app::edit::addTrack(m->project(), project::TrackKind::Synth));
     }
@@ -315,6 +318,7 @@ TEST_CASE("plugins (app): a real AudioUnit added through the model loads, shows 
     eng.prepare(kSr);
     {
         app::AppModel m(eng, kSr);
+        startEmpty(m);
         plugins::JucePluginProvider provider({}, kSr);
         m.setPluginProvider(&provider);
         m.apply(app::edit::addTrack(m.project(), project::TrackKind::Synth));

@@ -52,6 +52,7 @@ DeviceSpec device(const json& j) {
     d.type = get<std::string>(j, "type", "");
     d.on = getBool(j, "on", true);
     if (auto it = j.find("params"); it != j.end()) d.params = numMap(*it);
+    d.inDb = getOptNum(j, "in");
     d.outDb = getOptNum(j, "out");
     d.srcTrack = get<std::string>(j, "srcTrack", "");
     d.srcPitch = getOptNum(j, "srcPitch");

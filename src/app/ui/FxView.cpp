@@ -77,11 +77,6 @@ void Choice::mouseUp(const juce::MouseEvent& e) {
     const int i = indexAt(e.getPosition());
     if (i >= 0 && i != sel_ && onPick) onPick(min_ + i);
 }
-void Choice::mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& w) {
-    const int i = std::clamp(sel_ + (w.deltaY > 0 ? -1 : 1), 0, names_.size() - 1);
-    if (w.deltaY != 0.0f && i != sel_ && onPick) onPick(min_ + i);
-}
-
 // ---- drawing helpers ----
 
 namespace fx {

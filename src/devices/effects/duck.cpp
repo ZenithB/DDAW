@@ -99,6 +99,10 @@ public:
         }
     }
 
+    // The dip the ducker is making right now, for the meter (dB <= 0).
+    bool hasReductionMeter() const noexcept override { return true; }
+    float gainReductionDb() const override { return 20.0f * std::log10(std::max(gain_.current(), 1e-4f)); }
+
     void reset() override {
         posTicks_ = 0.0;
         playing_ = false;

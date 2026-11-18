@@ -26,7 +26,6 @@ public:
     int preferredWidth() const;
     void paint(juce::Graphics&) override;
     void mouseUp(const juce::MouseEvent&) override;
-    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     bool isMenu() const { return names_.size() > 4; }
     int count() const { return names_.size(); }
     juce::Rectangle<int> segment(int i) const;     // for tests

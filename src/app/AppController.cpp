@@ -32,7 +32,7 @@ AppController::~AppController() {
 
 void AppController::getAllCommands(juce::Array<juce::CommandID>& c) {
     c.addArray({NewProject, OpenProject, SaveProject, SaveProjectAs, ExportAudio, Quit, Undo, Redo, DeleteSelection, ShowSession, ShowArrangement,
-                ShowMixer, ShowClip, ShowDevices, AudioSettings, AddSynthTrack, AddDrumTrack, AddAudioTrack, AddBusTrack, AddScene, PlayStop,
+                ShowRouting, ShowClip, ShowDevices, AudioSettings, AddSynthTrack, AddDrumTrack, AddAudioTrack, AddBusTrack, AddScene, PlayStop,
                 ToggleMetronome, ImportSample});
 }
 
@@ -55,7 +55,7 @@ void AppController::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case DeleteSelection: set("Delete", "Edit"); break;
         case ShowSession: set("Session", "View", {'1', cmd, 0}); break;
         case ShowArrangement: set("Arrangement", "View", {'2', cmd, 0}); break;
-        case ShowMixer: set("Mixer", "View", {'3', cmd, 0}); break;
+        case ShowRouting: set("Routing", "View", {'3', cmd, 0}); break;
         case ShowClip: set("Clip Editor", "View", {'4', cmd, 0}); break;
         case ShowDevices: set("Devices", "View", {'5', cmd, 0}); break;
         case AudioSettings: set("Audio Settings...", "View", {',', cmd, 0}); break;
@@ -82,7 +82,7 @@ juce::PopupMenu AppController::getMenuForIndex(int index, const juce::String&) {
             break;
         case 1: item(Undo); item(Redo); break;
         case 2: item(AddSynthTrack); item(AddDrumTrack); item(AddAudioTrack); item(AddBusTrack); m.addSeparator(); item(AddScene); break;
-        case 3: item(ShowSession); item(ShowArrangement); item(ShowMixer); m.addSeparator(); item(ShowClip); item(ShowDevices); m.addSeparator(); item(AudioSettings); break;
+        case 3: item(ShowSession); item(ShowArrangement); item(ShowRouting); m.addSeparator(); item(ShowClip); item(ShowDevices); m.addSeparator(); item(AudioSettings); break;
         case 4: item(PlayStop); item(ToggleMetronome); break;
         default: break;
     }
@@ -103,7 +103,7 @@ bool AppController::perform(const InvocationInfo& info) {
         case Redo: model_.redo(); break;
         case ShowSession: main_.showMain(ui::MainComponent::MainTab::Session); model_.setArrangementMode(false); model_.notify(ModelEvent::Transport); break;
         case ShowArrangement: main_.showMain(ui::MainComponent::MainTab::Arrangement); model_.setArrangementMode(true); model_.notify(ModelEvent::Transport); break;
-        case ShowMixer: main_.showMain(ui::MainComponent::MainTab::Mixer); break;
+        case ShowRouting: main_.showMain(ui::MainComponent::MainTab::Routing); break;
         case ShowClip: main_.showDetail(ui::MainComponent::DetailTab::Clip); break;
         case ShowDevices: main_.showDetail(ui::MainComponent::DetailTab::Devices); break;
         case AudioSettings: audioSettings(); break;

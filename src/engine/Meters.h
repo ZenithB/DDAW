@@ -12,7 +12,7 @@ namespace ddaw::engine {
 
 constexpr int kMaxMeterTracks = 128;
 constexpr float kMeterReleaseSeconds = 0.3f;  // peak-hold fall time, as in synthyy
-constexpr int kMaxFxMeters = 8;    // effects per strip whose gain reduction is metered (the strip's first eight)
+constexpr int kMaxFxMeters = 16;   // effects per strip that are metered (gain reduction, input and output level): the strip's first sixteen
 constexpr int kMaxBands = 3;       // meters per effect (the multiband compressor's bands)
 
 struct MeterSnapshot {
@@ -69,7 +69,16 @@ public:
         if (track < -1 || track >= kMaxMeterTracks || fx < 0 || fx >= kMaxFxMeters) return -1.0f;
         return load(fxInfo_[size_t(track + 1) * kMaxFxMeters + size_t(fx)]) - 1.0f;
     }
-    void clearFx() noexcept { for (auto& a : fxGr_) store(a, 0.0f); for (auto& a : fxInfo_) store(a, 0.0f); }   // after a graph swap: the old effects are gone
+    // An effect's input and output level (peak of the block, decaying like the track meters), after its trims.
+    void setFxIo(int track, int fx, float inPeak, float outPeak, float decayPerBlock) noexcept {
+        if (track < -1 || track >= kMaxMeterTracks || fx < 0 || fx >= kMaxFxMeters) return;
+        const size_t k = size_t(track + 1) * kMaxFxMeters + size_t(fx);
+        store(fxIn_[k], std::max(inPeak, load(fxIn_[k]) * decayPerBlock));
+        store(fxOut_[k], std::max(outPeak, load(fxOut_[k]) * decayPerBlock));
+    }
+    float fxIn(int track, int fx) const noexcept { return track < -1 || track >= kMaxMeterTracks || fx < 0 || fx >= kMaxFxMeters ? 0.0f : load(fxIn_[size_t(track + 1) * kMaxFxMeters + size_t(fx)]); }
+    float fxOut(int track, int fx) const noexcept { return track < -1 || track >= kMaxMeterTracks || fx < 0 || fx >= kMaxFxMeters ? 0.0f : load(fxOut_[size_t(track + 1) * kMaxFxMeters + size_t(fx)]); }
+    void clearFx() noexcept { for (auto& a : fxGr_) store(a, 0.0f); for (auto& a : fxInfo_) store(a, 0.0f); for (auto& a : fxIn_) store(a, 0.0f); for (auto& a : fxOut_) store(a, 0.0f); }   // after a graph swap: the old effects are gone
     void setTrackScene(int i, int scene, double anchorTicks) noexcept {
         if (i < 0 || i >= kMaxMeterTracks) return;
         trackScene_[size_t(i)].store(scene, std::memory_order_relaxed);
@@ -104,7 +113,7 @@ private:
     static float load(const std::atomic<std::uint32_t>& a) noexcept { std::uint32_t b = a.load(std::memory_order_relaxed); float v; std::memcpy(&v, &b, 4); return v; }
     static size_t idx(int track, int fx, int band) noexcept { return (size_t(track + 1) * kMaxFxMeters + size_t(fx)) * kMaxBands + size_t(band); }
     std::array<std::atomic<std::uint32_t>, size_t(kMaxMeterTracks + 1) * kMaxFxMeters * kMaxBands> fxGr_{};
-    std::array<std::atomic<std::uint32_t>, size_t(kMaxMeterTracks + 1) * kMaxFxMeters> fxInfo_{};
+    std::array<std::atomic<std::uint32_t>, size_t(kMaxMeterTracks + 1) * kMaxFxMeters> fxInfo_{}, fxIn_{}, fxOut_{};
     std::array<std::atomic<std::uint32_t>, kMaxMeterTracks> trackPeak_{}, trackRms_{};
     std::array<std::atomic<int>, kMaxMeterTracks> trackScene_{};
     std::array<std::atomic<std::uint64_t>, kMaxMeterTracks> trackAnchor_{};

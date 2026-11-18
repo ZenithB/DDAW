@@ -39,10 +39,12 @@ std::string formatParam(const ParamSpec& spec, double value);
 double paramToUnit(const ParamSpec& spec, double value);
 double paramFromUnit(const ParamSpec& spec, double unit);
 
-// The drum machine's eight pads, in pitch order (note pitch modulo 8).
-inline const char* drumPadName(int pitch) {
-    static const char* n[] = {"Kick", "Snare", "Clap", "Closed Hat", "Open Hat", "Lo Tom", "Perc", "Crash"};
-    return n[((pitch % 8) + 8) % 8];
-}
+// The drum machines (the original `drum` and the synthesized kits): each has eight pads, in pitch order (note pitch modulo 8), and its
+// own names for them. A pad's parameters (p0_tune, p3_decay...) are labelled with the pad's name ("Kick Tune", "Closed Hat Decay").
+bool isDrumKit(std::string_view type);
+const char* drumPadName(std::string_view type, int pitch);
+inline const char* drumPadName(int pitch) { return drumPadName("drum", pitch); }
+struct DrumKitInfo { const char* type; const char* label; };
+const std::vector<DrumKitInfo>& drumKits();          // what the kit dropdown on a drum track lists
 
 }  // namespace ddaw::app

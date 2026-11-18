@@ -31,6 +31,7 @@ struct Selection {
     std::string scene;           // session scene of the selected clip slot (may be empty)
     edit::ClipRef clip;          // the clip open in the editor (invalid: none)
     project::Uid device = 0;
+    bool master = false;         // the master fader is selected: the device pane shows the master chain
     uint64_t clipOpens = 0;      // counts every time a clip is opened (clicked), so a view can tell that from a selection that merely changed
 };
 
@@ -63,6 +64,7 @@ public:
     // ---- selection ----
     const Selection& selection() const { return sel_; }
     void selectTrack(project::Uid uid);
+    void selectMaster();
     void selectClip(const edit::ClipRef& r);
     void selectDevice(project::Uid uid);
     void selectSlot(project::Uid track, const std::string& scene);  // an empty session slot (no clip open)
@@ -179,6 +181,9 @@ public:
     float reductionDb(project::Uid deviceUid, int band = 0) const;
     // The value a device publishes for its panel (see EffectDevice::info; -1 when it has none or is not built).
     float deviceValue(project::Uid deviceUid) const;
+    // An effect's input and output level (linear peak, after its trims) as the running graph reports it; 0 when it is not running.
+    float fxInputPeak(project::Uid deviceUid) const;
+    float fxOutputPeak(project::Uid deviceUid) const;
     bool metersMatchDocument() const;       // the running graph is the one built from the current document
 
     // ---- hosted plugins (L1) ----

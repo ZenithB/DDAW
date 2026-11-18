@@ -320,12 +320,12 @@ public:
     }
 
 protected:
-    juce::Rectangle<float> plot() const { return display_.reduced(10, 22).withTrimmedBottom(8); }
+    juce::Rectangle<float> plot() const { return display_.reduced(10, 22).withTrimmedBottom(8).withTrimmedRight(14); }
     double expo() const { return 0.35 + v("curve") * 1.6; }
     double gainAt(double ph) const { return (1.0 - v("amount")) + v("amount") * std::pow(ph, expo()); }
     double beats() const { static const double b[] = {2.0, 1.0, 2.0 / 3.0, 0.5, 1.0 / 3.0, 0.25}; return b[std::clamp(int(std::lround(v("rate"))), 0, 5)]; }
     bool animated() const override { return true; }
-    void onTick(double dt) override { phase_ = std::fmod(phase_ + dt * bpm() / 60.0 / beats(), 1.0); }
+    void onTick(double dt) override { phase_ = std::fmod(phase_ + dt * bpm() / 60.0 / beats(), 1.0); gr_ += (model_.reductionDb(uid_, 0) - gr_) * 0.5f; }
     void paintDisplay(juce::Graphics& g, juce::Rectangle<float> r) override {
         fx::frame(g, r);
         const auto p = plot();
@@ -340,6 +340,8 @@ protected:
         fx::node(g, {px, fx::yLin(p, gainAt(phase_), 0, 1)}, fx::coral, false, 4.0f);
         fx::node(g, {p.getX(), fx::yLin(p, gainAt(0), 0, 1)}, fx::amber, drag_ == 1, 6.5f);
         fx::node(g, {p.getX() + p.getWidth() * 0.5f, fx::yLin(p, gainAt(0.5), 0, 1)}, fx::violet, drag_ == 2, 6.0f);
+        grBar(g, {r.getRight() - 14, p.getY(), 8, p.getHeight()}, gr_);                         // the dip the engine is making right now
+        fx::label(g, "GR", {r.getRight() - 22, p.getBottom() + 1, 24, 10}, col::faint, 9.0f, juce::Justification::centred);
         fx::label(g, "dip " + juce::String(int(std::lround(v("amount") * 100))) + "%   shape " + juce::String(v("curve"), 2), {r.getX() + 10, r.getY() + 4, r.getWidth() - 20, 14}, col::text, 11.0f, juce::Justification::centredLeft, true);
         fx::label(g, "one cycle - drag the amber point for depth, the violet one for shape", {r.getX() + 10, r.getBottom() - 12, r.getWidth() - 20, 10}, col::faint, 9.0f);
     }
@@ -360,6 +362,7 @@ protected:
         if (ph == 3 && drag_) { drag_ = 0; end(); }
     }
     double phase_ = 0.0;
+    float gr_ = 0.0f;
     int drag_ = 0;
 };
 

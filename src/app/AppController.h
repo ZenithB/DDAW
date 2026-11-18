@@ -15,7 +15,7 @@ public:
     enum Command : int {
         NewProject = 0x2000, OpenProject, SaveProject, SaveProjectAs, ExportAudio, Quit,
         Undo, Redo, DeleteSelection,
-        ShowSession, ShowArrangement, ShowMixer, ShowClip, ShowDevices, AudioSettings,
+        ShowSession, ShowArrangement, ShowRouting, ShowClip, ShowDevices, AudioSettings,
         AddSynthTrack, AddDrumTrack, AddAudioTrack, AddBusTrack, AddScene,
         PlayStop, ToggleMetronome, ImportSample
     };

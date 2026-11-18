@@ -15,7 +15,11 @@ namespace fs = std::filesystem;
 AppModel::AppModel(engine::Engine& engine, double sampleRate) : engine_(engine), svc_(engine, sampleRate) {
     svc_.setSampleBank(bank_);
     recording_ = std::make_unique<RecordingController>(*this, engine_);
-    doc_ = std::make_unique<document::Document>();
+    {
+        project::Project fresh;
+        edit::addDefaultSends(fresh);
+        doc_ = std::make_unique<document::Document>(std::move(fresh), 1);
+    }
     session_ = std::make_unique<document::Session>(*doc_, svc_, engine_);
     svc_.start();
     session_->rebuild();
@@ -75,17 +79,27 @@ void AppModel::fixSelection() {
     if (sel_.clip.valid() && !edit::findClip(p, sel_.clip)) sel_.clip = {};
     if (!sel_.scene.empty() && std::find(p.scenes.begin(), p.scenes.end(), sel_.scene) == p.scenes.end()) sel_.scene.clear();
     if (sel_.device && !doc_->findDevice(sel_.device)) sel_.device = 0;
-    if (!sel_.track && !p.tracks.empty()) sel_.track = p.tracks.front().uid;
+    if (!sel_.track) {                                       // the first track that is not a bus, else the first
+        for (auto& t : p.tracks) if (t.kind != project::TrackKind::Bus) { sel_.track = t.uid; break; }
+        if (!sel_.track && !p.tracks.empty()) sel_.track = p.tracks.front().uid;
+    }
 }
 
+void AppModel::selectMaster() {
+    sel_.master = true;
+    sel_.device = 0;
+    notify(ModelEvent::Selection);
+}
 void AppModel::selectTrack(project::Uid uid) {
     sel_.track = uid;
+    sel_.master = false;
     sel_.device = 0;
     notify(ModelEvent::Selection);
 }
 void AppModel::selectClip(const edit::ClipRef& r) {
     sel_.clip = r;
     if (r.valid()) {
+        sel_.master = false;
         ++sel_.clipOpens;
         if (r.arrKey.empty()) { sel_.track = r.track; sel_.scene = r.scene; }
         else if (auto it = project().arr.find(r.arrKey); it != project().arr.end())
@@ -282,6 +296,7 @@ void AppModel::setMetronome(bool on) {
 
 void AppModel::replaceDocument(project::Project p, project::Uid nextUid) {
     session_.reset();
+    edit::migrateLegacySends(p);                         // one mechanism for sends: per-bus levels
     doc_ = std::make_unique<document::Document>(std::move(p), nextUid);
     session_ = std::make_unique<document::Session>(*doc_, svc_, engine_);
     if (plugins_) {   // a new document: keep only the plugins it uses, and load them before its first build
@@ -328,6 +343,16 @@ bool AppModel::metersMatchDocument() const {
 float AppModel::reductionDb(project::Uid uid, int band) const {
     int t, s;
     return metersMatchDocument() && fxSlotOf(project(), uid, t, s) ? engine_.meters().fxGr(t, s, band) : 0.0f;
+}
+
+float AppModel::fxInputPeak(project::Uid uid) const {
+    int t, s;
+    return metersMatchDocument() && fxSlotOf(project(), uid, t, s) ? engine_.meters().fxIn(t, s) : 0.0f;
+}
+
+float AppModel::fxOutputPeak(project::Uid uid) const {
+    int t, s;
+    return metersMatchDocument() && fxSlotOf(project(), uid, t, s) ? engine_.meters().fxOut(t, s) : 0.0f;
 }
 
 float AppModel::deviceValue(project::Uid uid) const {
@@ -385,7 +410,9 @@ void AppModel::newProject() {
     bank_ = std::make_shared<project::SampleBank>();
     svc_.setSampleBank(bank_);
     sampleNames_.clear();
-    replaceDocument(project::Project{}, 1);
+    project::Project fresh;
+    edit::addDefaultSends(fresh);                        // every session starts with Send A (a reverb) and Send B (a ping pong)
+    replaceDocument(std::move(fresh), 1);
     path_.clear();
     notify(ModelEvent::File);
     notify(ModelEvent::Document);

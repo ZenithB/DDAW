@@ -134,6 +134,7 @@ private:
 
     app::edit::ClipRef ref_;
     bool drum_ = false;
+    std::string drumType_ = "drum";        // the drum machine on the open clip's track: names its rows
     app::TimeScale scale_{64.0, 0.0};
     double scrollY_ = 0;
     double gridTicks_ = 0;  // 0 = auto

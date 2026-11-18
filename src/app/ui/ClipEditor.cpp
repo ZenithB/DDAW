@@ -107,6 +107,7 @@ void ClipEditor::refresh(app::ModelEvent e) {
         if (it != model.project().arr.end()) track = app::edit::findTrackById(model.project(), it->second.trackId);
     }
     drum_ = track && track->kind == project::TrackKind::Drum;
+    drumType_ = track ? track->inst.type : "drum";
     const bool audio = c && c->audio;
     for (juce::Component* k : std::initializer_list<juce::Component*>{&gainKnob_, &pitchKnob_, &loopChip_, &revChip_}) k->setVisible(audio);
     const bool notes = c && !audio;
@@ -409,7 +410,7 @@ void ClipEditor::paint(juce::Graphics& g) {
             const bool black = !drum_ && app::isBlackKey(pitch);
             g.setColour(pitch == keyDown_ ? col::accent : black ? col::black : col::text.withMultipliedBrightness(0.82f));
             g.fillRect(kr.withTrimmedBottom(1).withTrimmedRight(black ? 14 : 0));
-            if (drum_) { g.setColour(col::black); g.setFont(uiFont(11.0f)); g.drawText(app::drumPadName(pitch), kr.reduced(4, 0), juce::Justification::centredLeft); }
+            if (drum_) { g.setColour(col::black); g.setFont(uiFont(11.0f)); g.drawText(app::drumPadName(drumType_, pitch), kr.reduced(4, 0), juce::Justification::centredLeft); }
             else if (pitch % 12 == 0) { g.setColour(col::black); g.setFont(uiFont(10.0f)); g.drawText(app::noteName(pitch), kr.reduced(4, 0), juce::Justification::centredRight); }
         }
     }

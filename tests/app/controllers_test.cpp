@@ -3,6 +3,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "EmptyModel.h"
+
 #include "app/model/AppModel.h"
 #include "app/model/Controllers.h"
 #include "project/ProjectJson.h"
@@ -20,6 +22,7 @@ struct Rig {
     Rig() {
         eng.prepare(48000.0);
         m = std::make_unique<AppModel>(eng, 48000.0);
+        startEmpty(*m);
         REQUIRE(m->apply(edit::addTrack(m->project(), project::TrackKind::Synth)));
         track = m->project().tracks[0].uid;
         id = m->project().tracks[0].id;

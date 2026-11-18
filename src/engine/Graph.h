@@ -72,6 +72,7 @@ struct PdcLine {
 
 struct FxSlot {
     std::unique_ptr<EffectDevice> dev;
+    dsp::Smoother in = [] { dsp::Smoother s; s.snap(1.0f); return s; }();   // linear gain from the device's `in` (dB), ahead of the device; unity until built
     dsp::Smoother out;  // linear gain from the device's `out` (dB)
     AModBufs mod;       // audio-rate inputs (empty when nothing is routed to this device)
     // Sidechain: the device's detector runs on another track's tap (after its effects, before pan, fader and mute: a muted track

@@ -116,6 +116,68 @@ Command addReturnBus(const Project& p, project::SendBus which) {
     return {"track.insert", {{"index", p.tracks.size()}, {"track", project::trackToJson(t)}}};
 }
 
+namespace {
+project::Track makeSendBus(const Project& p, const char* name, const char* fxType) {
+    project::Track t;
+    t.id = uniqueTrackId(p);
+    t.kind = project::TrackKind::Bus;
+    t.name = name;
+    t.inst.type = "audiobus";
+    t.inst.id = "inst";
+    project::DeviceSpec fx;
+    fx.type = fxType;
+    fx.id = uniqueDeviceId(p, fx.type);
+    fx.params["mix"] = 1.0;                 // a send bus carries only the effect
+    t.fx.push_back(fx);
+    return t;
+}
+}  // namespace
+
+Command addSendBus(const Project& p, const std::string& name, const std::string& fxType) {
+    const auto t = makeSendBus(p, name.c_str(), fxType.c_str());
+    return {"track.insert", {{"index", p.tracks.size()}, {"track", project::trackToJson(t)}}};
+}
+
+void addDefaultSends(Project& p) {
+    p.tracks.push_back(makeSendBus(p, "Send A", "reverb"));
+    p.tracks.push_back(makeSendBus(p, "Send B", "pingpong"));
+}
+
+void migrateLegacySends(Project& p) {
+    // built-in returns (imported projects) become buses: index 0 is send A, index 1 is send B
+    std::vector<std::string> fromReturns;
+    for (const auto& r : p.returns) {
+        auto t = makeSendBus(p, r.name.empty() ? (fromReturns.empty() ? "Send A" : "Send B") : r.name.c_str(), r.fxType.empty() ? "reverb" : r.fxType.c_str());
+        t.fx[0].params = r.params;
+        t.gainDb = r.gainDb;
+        fromReturns.push_back(t.id);
+        p.tracks.push_back(std::move(t));
+    }
+    // a letter bus becomes a plain one; the sends to it become per-bus sends
+    std::string busA, busB;
+    for (const auto& t : p.tracks) if (t.kind == project::TrackKind::Bus) { if (t.send == project::SendBus::A) busA = t.id; if (t.send == project::SendBus::B) busB = t.id; }
+    if (busA.empty() && fromReturns.size() > 0) busA = fromReturns[0];
+    if (busB.empty() && fromReturns.size() > 1) busB = fromReturns[1];
+    for (auto& t : p.tracks) {
+        if (t.kind == project::TrackKind::Bus) { if (t.send == project::SendBus::A || t.send == project::SendBus::B) t.send = project::SendBus::None; continue; }
+        if (t.sendA > 0.0 && !busA.empty() && !t.sends.count(busA)) { t.sends[busA] = t.sendA; t.sendA = 0.0; }
+        if (t.sendB > 0.0 && !busB.empty() && !t.sends.count(busB)) { t.sends[busB] = t.sendB; t.sendB = 0.0; }
+    }
+    p.returns.clear();
+}
+
+std::vector<const project::Track*> outputTargets(const Project& p, Uid uid) {
+    std::vector<const project::Track*> out;
+    const auto* s = findTrack(p, uid);
+    if (!s) return out;
+    for (auto& t : p.tracks) {
+        if (t.kind != project::TrackKind::Bus || t.uid == uid) continue;
+        if (project::busReaches(p, t.id, s->id)) continue;
+        out.push_back(&t);
+    }
+    return out;
+}
+
 Command removeTrack(Uid uid) { return {"track.remove", {{"uid", uid}}}; }
 Command addScene(const Project& p) { return {"scene.insert", {{"index", p.scenes.size()}, {"id", uniqueSceneId(p)}}}; }
 Command removeScene(const std::string& id) { return {"scene.remove", {{"id", id}}}; }

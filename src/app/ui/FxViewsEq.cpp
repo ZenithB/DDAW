@@ -78,14 +78,6 @@ public:
         setDisplayWidth(520);
         for (int b = 0; b < 7; ++b) { fk_[b] = "b" + std::to_string(b) + "_freq"; gk_[b] = "b" + std::to_string(b) + "_gain"; qk_[b] = "b" + std::to_string(b) + "_q"; claim({fk_[b].c_str(), gk_[b].c_str(), qk_[b].c_str()}); }
     }
-    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override {
-        const int b = hit(e.position) >= 0 ? hit(e.position) : sel_;
-        if (b <= 0 || b >= 6 || w.deltaY == 0.0f) return;            // the shelves have no Q
-        begin();
-        set(qk_[b].c_str(), v(qk_[b].c_str()) * std::pow(1.25, w.deltaY > 0 ? 1.0 : -1.0));
-        end();
-        sel_ = b;
-    }
 
 protected:
     static constexpr double kRange = 18.0;
@@ -129,12 +121,16 @@ protected:
             if (sel_ > 0 && sel_ < 6) s << "  Q " << juce::String(v(qk_[sel_].c_str()), 2);
             fx::label(g, s, {r.getX() + 30, r.getY() + 3, r.getWidth() - 40, 14}, col::text, 11.0f, juce::Justification::centredLeft, true);
         } else {
-            fx::label(g, "drag a band: sideways = frequency, up/down = gain, wheel = Q", {r.getX() + 30, r.getY() + 3, r.getWidth() - 40, 14}, col::faint, 10.0f);
+            fx::label(g, "drag a band: sideways = frequency, up/down = gain, Shift-drag = Q", {r.getX() + 30, r.getY() + 3, r.getWidth() - 40, 14}, col::faint, 10.0f);
         }
     }
     void pointer(const juce::MouseEvent& e, int ph) override {
         if (ph == 0) { const int h = hit(e.position); if (h != hover_) { hover_ = h; repaint(); } return; }
-        if (ph == 1) { drag_ = hit(e.position); if (drag_ >= 0) { sel_ = drag_; begin(); } else { sel_ = -1; repaint(); } return; }
+        if (ph == 1) { drag_ = hit(e.position); if (drag_ >= 0) { sel_ = drag_; q0_ = v(qk_[drag_].c_str()); y0_ = e.position.y; begin(); } else { sel_ = -1; repaint(); } return; }
+        if (ph == 2 && drag_ >= 0 && e.mods.isShiftDown() && drag_ > 0 && drag_ < 6) {        // Shift-drag: up and down is the band's Q (the wheel never edits)
+            set(qk_[drag_].c_str(), q0_ * std::pow(2.0, double(y0_ - e.position.y) / 40.0));
+            return;
+        }
         if (ph == 2 && drag_ >= 0) {
             set(fk_[drag_].c_str(), std::round(fx::hzAt(display_, e.position.x)));                          // inside a gesture: one undo step
             set(gk_[drag_].c_str(), std::round(fx::valueAt(display_, e.position.y, -kRange, kRange) * 2.0) / 2.0);
@@ -145,6 +141,8 @@ protected:
     }
     std::string fk_[7], gk_[7], qk_[7];
     int hover_ = -1, drag_ = -1, sel_ = -1;
+    double q0_ = 1.0;
+    float y0_ = 0;
 };
 
 // ---- Filter: one node; the curve is the cascade of the chosen number of two-pole sections ----

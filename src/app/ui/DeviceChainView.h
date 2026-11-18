@@ -23,7 +23,7 @@ public:
 
     class Panel;
     int panelCount() const { return int(panels_.size()); }
-    bool showingMaster() const { return master_.isOn(); }
+    bool showingMaster() const { return model.selection().master; }       // the master fader is selected (there is no button for it)
 
 private:
     void rebuild();
@@ -31,7 +31,7 @@ private:
     juce::String signature() const;
 
     std::vector<std::unique_ptr<Panel>> panels_;
-    Chip addFx_{"+ Effect"}, addMidi_{"+ MIDI"}, master_{"Master chain"};
+    Chip addFx_{"+ Effect"}, addMidi_{"+ MIDI"};
     juce::String sig_;
     int scrollX_ = 0, contentW_ = 0;
     bool dropHint_ = false;
