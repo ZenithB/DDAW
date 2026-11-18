@@ -164,6 +164,12 @@ void Engine::drainCommands() noexcept {
                     transport_.loopEnd = std::max(cur_->loopStart() + 384.0, cur_->loopEnd());
                 }
                 transport_.play(c.transportPlay.fromTicks, mode);
+                if (cur_ && mode == TransportMode::Session) {
+                    // Every clip in play mode starts now, together: one launched while the transport ran is still anchored at the bar
+                    // line it was queued for, and would sit out the time until then when the transport starts again.
+                    for (int i = 0; i < cur_->trackCount(); ++i)
+                        if (const auto scene = cur_->sched(i).launchedScene()) cur_->sched(i).launch(*scene, transport_.positionTicks());
+                }
                 if (cur_) cur_->relocateAll(mode, transport_.positionTicks());
                 resetMetronome();
                 break;
