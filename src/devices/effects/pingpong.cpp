@@ -12,6 +12,8 @@
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
 #include "dsp/DelayLine.h"
+#include "devices/schema/SchemaExt.h"
+#include "dsp/FxBits.h"
 #include "dsp/Smoother.h"
 
 namespace ddaw::devices {
@@ -19,7 +21,7 @@ namespace {
 
 using namespace ddaw::dsp;
 
-enum P : uint16_t { Time, Fb, Mix };
+enum P : uint16_t { Time, Fb, Mix, Tone, Duck, Wobble };
 
 constexpr float kFractions[6] = {1.0f / 32.0f, 1.0f / 16.0f, 1.0f / 8.0f, 3.0f / 16.0f, 1.0f / 4.0f, 1.0f / 2.0f};
 constexpr float kMaxDelaySec = 4.0f;
@@ -33,7 +35,7 @@ public:
         prepare(44100.0, 128);
     }
 
-    std::span<const ParamSpec> params() const override { return schema::kFxPingpong; }
+    std::span<const ParamSpec> params() const override { return schema::kFxPingpongExt; }
 
     void prepare(double sr, int) override {
         sr_ = std::max(static_cast<float>(sr), 1.0f);
@@ -42,6 +44,7 @@ public:
         lineRPre_.prepare(maxSamples);
         lineR_.prepare(maxSamples);
         delaySmp_.prepare(sr_, kTimeRampMs);
+        toneL_.prepare(sr_); toneR_.prepare(sr_); duck_.prepare(sr_); wob_.prepare(sr_);
         fb_.prepare(sr_, 15.0f);
         mix_.prepare(sr_, 15.0f);
         delaySmp_.snap(delaySamples());
@@ -57,6 +60,9 @@ public:
                 break;
             case Fb: fb_.setTarget(std::clamp(v, 0.0f, 0.9f)); break;
             case Mix: mix_.setTarget(std::clamp(v, 0.0f, 1.0f)); break;
+            case Tone: toneL_.set(v); toneR_.set(v); break;
+            case Duck: duckAmt_ = std::clamp(v, 0.0f, 1.0f); break;
+            case Wobble: wobble_ = std::clamp(v, 0.0f, 1.0f); break;
             default: break;
         }
     }
@@ -68,7 +74,8 @@ public:
         }
         constexpr float kHalfPi = std::numbers::pi_v<float> * 0.5f;
         for (int i = 0; i < n; ++i) {
-            const float d = delaySmp_.next();
+            float d = delaySmp_.next();
+            if (wobble_ > 0.0f) d = std::max(1.0f, d + wobble_ * wob_.next() * 0.0015f * sr_);
             const float fb = fb_.next();
             const float mix = mix_.next();
             const float dryG = std::cos(mix * kHalfPi);
@@ -79,10 +86,11 @@ public:
             const float rPre = lineRPre_.readFrac(d);
             lineRPre_.write(r[i]);
             // cross-feedback: each wet output into the other delay's input
-            lineL_.write(l[i] + wr * fb);
-            lineR_.write(rPre + wl * fb);
-            l[i] = l[i] * dryG + wl * wetG;
-            r[i] = r[i] * dryG + wr * wetG;
+            lineL_.write(l[i] + toneR_.process(wr) * fb);
+            lineR_.write(rPre + toneL_.process(wl) * fb);
+            const float duckG = duck_.gain(std::max(std::abs(l[i]), std::abs(r[i])), duckAmt_);
+            l[i] = l[i] * dryG + wl * wetG * duckG;
+            r[i] = r[i] * dryG + wr * wetG * duckG;
         }
     }
 
@@ -90,6 +98,7 @@ public:
         lineL_.clear();
         lineRPre_.clear();
         lineR_.clear();
+        toneL_.reset(); toneR_.reset(); duck_.reset(); wob_.reset();
         delaySmp_.snap(delaySamples());
         fb_.snap(fb_.target());
         mix_.snap(mix_.target());
@@ -107,6 +116,10 @@ private:
     int timeIdx_ = 2;
     Smoother delaySmp_, fb_, mix_;
     DelayLine lineL_, lineRPre_, lineR_;
+    ToneLp toneL_, toneR_;
+    WetDuck duck_;
+    TapeDrift wob_;
+    float duckAmt_ = 0.0f, wobble_ = 0.0f;
 };
 
 }  // namespace

@@ -108,10 +108,12 @@ void Engine::pollIncomingGraph() noexcept {
         if (old_) retire(old_);  // two swaps in one callback: the first fade never ran
         old_ = cur_;
         cur_ = g;
-        if (old_) {  // clips launched in the outgoing graph keep playing in the new one (same track index)
-            const int common = std::min(old_->trackCount(), cur_->trackCount());
-            for (int i = 0; i < common; ++i)
-                if (auto scene = old_->sched(i).launchedScene()) cur_->sched(i).launch(*scene, old_->sched(i).anchor());
+        if (old_) {  // clips launched in the outgoing graph keep playing in the new one, on the same track (matched by id: positions shift when a track is deleted or inserted)
+            for (int i = 0; i < cur_->trackCount(); ++i) {
+                const int j = cur_->indexInOf(*old_, size_t(i));
+                if (j < 0) continue;
+                if (auto scene = old_->sched(j).launchedScene()) cur_->sched(i).launch(*scene, old_->sched(j).anchor());
+            }
         }
         if (transport_.playing()) cur_->relocateAll(transport_.mode(), transport_.positionTicks());
         if (old_) cur_->inheritNotes(*old_);

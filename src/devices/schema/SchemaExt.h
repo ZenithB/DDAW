@@ -54,4 +54,145 @@ inline constexpr ParamSpec kFxChordres[] = {
     {23, "thresh", -80.0f, -20.0f, -55.0f, Curve::Linear, 15.0f, false},
 };
 
+// ---- new controls on ported effects (ARCH 27): each table is the generated one unchanged, then the additions at their neutral values ----
+
+// `delay`: tone (a low-pass in the feedback path; 20 kHz = off), duck (the echoes drop while you play; 0 = off), wobble (tape drift of the time; 0 = off).
+inline constexpr ParamSpec kFxDelayExt[] = {
+    {0, "time", 0.0f, 5.0f, 2.0f, Curve::Stepped, 0.0f, false},
+    {1, "fb", 0.0f, 0.85f, 0.35f, Curve::Linear, 15.0f, false},
+    {2, "mix", 0.0f, 1.0f, 0.35f, Curve::Linear, 15.0f, false},
+    {3, "tone", 200.0f, 20000.0f, 20000.0f, Curve::Exponential, 15.0f, false},
+    {4, "duck", 0.0f, 1.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {5, "wobble", 0.0f, 1.0f, 0.0f, Curve::Linear, 15.0f, false},
+};
+inline constexpr ParamSpec kFxPingpongExt[] = {
+    {0, "time", 0.0f, 5.0f, 2.0f, Curve::Stepped, 0.0f, false},
+    {1, "fb", 0.0f, 0.85f, 0.4f, Curve::Linear, 15.0f, false},
+    {2, "mix", 0.0f, 1.0f, 0.3f, Curve::Linear, 15.0f, false},
+    {3, "tone", 200.0f, 20000.0f, 20000.0f, Curve::Exponential, 15.0f, false},
+    {4, "duck", 0.0f, 1.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {5, "wobble", 0.0f, 1.0f, 0.0f, Curve::Linear, 15.0f, false},
+};
+
+// `reverb`: predelay (was fixed at 20 ms), tone (a low-pass on the tail; 20 kHz = off), lowcut (a high-pass on the tail; 20 Hz = off), duck.
+inline constexpr ParamSpec kFxReverbExt[] = {
+    {0, "size", 0.2f, 10.0f, 2.2f, Curve::Exponential, 15.0f, false},
+    {1, "mix", 0.0f, 1.0f, 0.3f, Curve::Linear, 15.0f, false},
+    {2, "predelay", 0.0f, 0.2f, 0.02f, Curve::Linear, 15.0f, false},
+    {3, "tone", 500.0f, 20000.0f, 20000.0f, Curve::Exponential, 15.0f, false},
+    {4, "lowcut", 20.0f, 1000.0f, 20.0f, Curve::Exponential, 15.0f, false},
+    {5, "duck", 0.0f, 1.0f, 0.0f, Curve::Linear, 15.0f, false},
+};
+// `plate`: lowcut and duck, as on the reverb.
+inline constexpr ParamSpec kFxPlateExt[] = {
+    {0, "decay", 0.3f, 8.0f, 1.8f, Curve::Exponential, 15.0f, false},
+    {1, "predelay", 0.0f, 0.2f, 0.02f, Curve::Linear, 15.0f, false},
+    {2, "damp", 500.0f, 16000.0f, 6000.0f, Curve::Exponential, 15.0f, false},
+    {3, "mix", 0.0f, 1.0f, 0.3f, Curve::Linear, 15.0f, false},
+    {4, "lowcut", 20.0f, 1000.0f, 20.0f, Curve::Exponential, 15.0f, false},
+    {5, "duck", 0.0f, 1.0f, 0.0f, Curve::Linear, 15.0f, false},
+};
+
+
+// ---- LFO phase (and shape) on every effect LFO, phase on the instruments' LFOs (ARCH 27): degrees, 0 = the old start phase ----
+// `chorus`: phase (degrees) and the LFO's shape (sine, triangle, saw up, saw down, square, sample-and-hold, smooth random).
+inline constexpr ParamSpec kFxChorusExt[] = {
+    {0, "rate", 0.01f, 300.0f, 1.5f, Curve::Exponential, 15.0f, false},  // rateSwitch: Sync/Low/High rate modes
+    {1, "depth", 0.0f, 1.0f, 0.5f, Curve::Linear, 15.0f, false},
+    {2, "mix", 0.0f, 1.0f, 0.5f, Curve::Linear, 15.0f, false},
+    {3, "rateMode", 0.0f, 2.0f, 1.0f, Curve::Stepped, 0.0f, false},  // 0 Sync, 1 Low (rate), 2 High (rateHi)
+    {4, "rateSync", 0.0f, 8.0f, 5.0f, Curve::Stepped, 0.0f, false},  // tempo division index
+    {5, "rateHi", 301.0f, 1000.0f, 440.0f, Curve::Stepped, 0.0f, false},  // Hz, High mode
+    {6, "phase", 0.0f, 360.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {7, "shape", 0.0f, 6.0f, 0.0f, Curve::Stepped, 0.0f, false},
+};
+// `phaser`: phase (degrees) and the LFO's shape (sine, triangle, saw up, saw down, square, sample-and-hold, smooth random).
+inline constexpr ParamSpec kFxPhaserExt[] = {
+    {0, "rate", 0.01f, 300.0f, 0.8f, Curve::Exponential, 15.0f, false},  // rateSwitch: Sync/Low/High rate modes
+    {1, "octaves", 1.0f, 6.0f, 3.0f, Curve::Stepped, 0.0f, false},
+    {2, "mix", 0.0f, 1.0f, 0.5f, Curve::Linear, 15.0f, false},
+    {3, "rateMode", 0.0f, 2.0f, 1.0f, Curve::Stepped, 0.0f, false},  // 0 Sync, 1 Low (rate), 2 High (rateHi)
+    {4, "rateSync", 0.0f, 8.0f, 5.0f, Curve::Stepped, 0.0f, false},  // tempo division index
+    {5, "rateHi", 301.0f, 1000.0f, 440.0f, Curve::Stepped, 0.0f, false},  // Hz, High mode
+    {6, "phase", 0.0f, 360.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {7, "shape", 0.0f, 6.0f, 0.0f, Curve::Stepped, 0.0f, false},
+};
+// `vib`: phase (degrees) and the LFO's shape (sine, triangle, saw up, saw down, square, sample-and-hold, smooth random).
+inline constexpr ParamSpec kFxVibExt[] = {
+    {0, "rate", 0.01f, 300.0f, 5.0f, Curve::Exponential, 15.0f, false},  // rateSwitch: Sync/Low/High rate modes
+    {1, "depth", 0.0f, 0.6f, 0.15f, Curve::Linear, 15.0f, false},
+    {2, "mix", 0.0f, 1.0f, 1.0f, Curve::Linear, 15.0f, false},
+    {3, "rateMode", 0.0f, 2.0f, 1.0f, Curve::Stepped, 0.0f, false},  // 0 Sync, 1 Low (rate), 2 High (rateHi)
+    {4, "rateSync", 0.0f, 8.0f, 5.0f, Curve::Stepped, 0.0f, false},  // tempo division index
+    {5, "rateHi", 301.0f, 1000.0f, 440.0f, Curve::Stepped, 0.0f, false},  // Hz, High mode
+    {6, "phase", 0.0f, 360.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {7, "shape", 0.0f, 6.0f, 0.0f, Curve::Stepped, 0.0f, false},
+};
+// `trem`: phase (degrees) and the LFO's shape (sine, triangle, saw up, saw down, square, sample-and-hold, smooth random).
+inline constexpr ParamSpec kFxTremExt[] = {
+    {0, "rate", 0.01f, 300.0f, 5.0f, Curve::Exponential, 15.0f, false},  // rateSwitch: Sync/Low/High rate modes
+    {1, "depth", 0.0f, 1.0f, 0.6f, Curve::Linear, 15.0f, false},
+    {2, "mix", 0.0f, 1.0f, 1.0f, Curve::Linear, 15.0f, false},
+    {3, "rateMode", 0.0f, 2.0f, 1.0f, Curve::Stepped, 0.0f, false},  // 0 Sync, 1 Low (rate), 2 High (rateHi)
+    {4, "rateSync", 0.0f, 8.0f, 5.0f, Curve::Stepped, 0.0f, false},  // tempo division index
+    {5, "rateHi", 301.0f, 1000.0f, 440.0f, Curve::Stepped, 0.0f, false},  // Hz, High mode
+    {6, "phase", 0.0f, 360.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {7, "shape", 0.0f, 6.0f, 0.0f, Curve::Stepped, 0.0f, false},
+};
+// `autopan`: phase (degrees) and the LFO's shape (sine, triangle, saw up, saw down, square, sample-and-hold, smooth random).
+inline constexpr ParamSpec kFxAutopanExt[] = {
+    {0, "rate", 0.01f, 300.0f, 1.5f, Curve::Exponential, 15.0f, false},  // rateSwitch: Sync/Low/High rate modes
+    {1, "depth", 0.0f, 1.0f, 0.8f, Curve::Linear, 15.0f, false},
+    {2, "rateMode", 0.0f, 2.0f, 1.0f, Curve::Stepped, 0.0f, false},  // 0 Sync, 1 Low (rate), 2 High (rateHi)
+    {3, "rateSync", 0.0f, 8.0f, 5.0f, Curve::Stepped, 0.0f, false},  // tempo division index
+    {4, "rateHi", 301.0f, 1000.0f, 440.0f, Curve::Stepped, 0.0f, false},  // Hz, High mode
+    {5, "phase", 0.0f, 360.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {6, "shape", 0.0f, 6.0f, 0.0f, Curve::Stepped, 0.0f, false},
+};
+// `autofilt`: phase (degrees) and the LFO's shape (sine, triangle, saw up, saw down, square, sample-and-hold, smooth random).
+inline constexpr ParamSpec kFxAutofiltExt[] = {
+    {0, "rate", 0.01f, 300.0f, 1.0f, Curve::Exponential, 15.0f, false},  // rateSwitch: Sync/Low/High rate modes
+    {1, "depth", 0.0f, 1.0f, 0.7f, Curve::Linear, 15.0f, false},
+    {2, "base", 80.0f, 4000.0f, 350.0f, Curve::Exponential, 15.0f, false},
+    {3, "mix", 0.0f, 1.0f, 1.0f, Curve::Linear, 15.0f, false},
+    {4, "rateMode", 0.0f, 2.0f, 1.0f, Curve::Stepped, 0.0f, false},  // 0 Sync, 1 Low (rate), 2 High (rateHi)
+    {5, "rateSync", 0.0f, 8.0f, 5.0f, Curve::Stepped, 0.0f, false},  // tempo division index
+    {6, "rateHi", 301.0f, 1000.0f, 440.0f, Curve::Stepped, 0.0f, false},  // Hz, High mode
+    {7, "phase", 0.0f, 360.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {8, "shape", 0.0f, 6.0f, 0.0f, Curve::Stepped, 0.0f, false},
+};
+// `poly`: the LFO's phase (degrees).
+inline constexpr ParamSpec kInstPolyExt[] = {
+    {0, "wave", 0.0f, 6.0f, 0.0f, Curve::Stepped, 0.0f, false},
+    {1, "spread", 0.0f, 60.0f, 18.0f, Curve::Linear, 15.0f, false},
+    {2, "cutoff", 80.0f, 14000.0f, 7000.0f, Curve::Exponential, 15.0f, false},
+    {3, "res", 0.0f, 10.0f, 0.7f, Curve::Linear, 15.0f, false},
+    {4, "slope", 0.0f, 2.0f, 0.0f, Curve::Stepped, 0.0f, false},
+    {5, "attack", 0.001f, 2.0f, 0.01f, Curve::Exponential, 15.0f, false},
+    {6, "decay", 0.01f, 2.0f, 0.15f, Curve::Exponential, 15.0f, false},
+    {7, "sustain", 0.0f, 1.0f, 0.6f, Curve::Linear, 15.0f, false},
+    {8, "release", 0.01f, 4.0f, 0.4f, Curve::Exponential, 15.0f, false},
+    {9, "lfoShape", 0.0f, 3.0f, 0.0f, Curve::Stepped, 0.0f, false},
+    {10, "lfoRate", 0.05f, 16.0f, 2.0f, Curve::Exponential, 15.0f, false},
+    {11, "lfoAmt", 0.0f, 1.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {12, "lfoPhase", 0.0f, 360.0f, 0.0f, Curve::Linear, 15.0f, false},
+};
+// `mono`: the LFO's phase (degrees).
+inline constexpr ParamSpec kInstMonoExt[] = {
+    {0, "wave", 0.0f, 3.0f, 0.0f, Curve::Stepped, 0.0f, false},
+    {1, "cutoff", 40.0f, 8000.0f, 900.0f, Curve::Exponential, 15.0f, false},
+    {2, "res", 0.0f, 10.0f, 2.0f, Curve::Linear, 15.0f, false},
+    {3, "slope", 0.0f, 2.0f, 1.0f, Curve::Stepped, 0.0f, false},
+    {4, "envAmt", 0.0f, 6.0f, 2.5f, Curve::Linear, 15.0f, false},
+    {5, "glide", 0.0f, 0.3f, 0.02f, Curve::Linear, 15.0f, false},
+    {6, "attack", 0.001f, 2.0f, 0.003f, Curve::Exponential, 15.0f, false},
+    {7, "decay", 0.01f, 2.0f, 0.2f, Curve::Exponential, 15.0f, false},
+    {8, "sustain", 0.0f, 1.0f, 0.45f, Curve::Linear, 15.0f, false},
+    {9, "release", 0.01f, 4.0f, 0.25f, Curve::Exponential, 15.0f, false},
+    {10, "lfoShape", 0.0f, 3.0f, 0.0f, Curve::Stepped, 0.0f, false},
+    {11, "lfoRate", 0.05f, 16.0f, 2.0f, Curve::Exponential, 15.0f, false},
+    {12, "lfoAmt", 0.0f, 1.0f, 0.0f, Curve::Linear, 15.0f, false},
+    {13, "lfoPhase", 0.0f, 360.0f, 0.0f, Curve::Linear, 15.0f, false},
+};
+
 }  // namespace ddaw::schema

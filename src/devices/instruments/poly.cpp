@@ -13,6 +13,7 @@
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
 #include "dsp/Adsr.h"
+#include "devices/schema/SchemaExt.h"
 #include "dsp/Lfo.h"
 #include "dsp/Math.h"
 #include "dsp/PolyBlepOsc.h"
@@ -25,7 +26,7 @@ namespace {
 using namespace ddaw::dsp;
 
 // Index in schema::kInstPoly.
-enum P : uint16_t { Wave_, Spread, Cutoff, Res, Slope, Attack, Decay, Sustain, Release, LfoShape, LfoRate, LfoAmt };
+enum P : uint16_t { Wave_, Spread, Cutoff, Res, Slope, Attack, Decay, Sustain, Release, LfoShape, LfoRate, LfoAmt, LfoPhase };
 
 constexpr int kVoices = 16;
 constexpr int kUnison = 3;
@@ -59,7 +60,7 @@ public:
         lfoAmt_.setTimeMs(30.0f);
     }
 
-    std::span<const ParamSpec> params() const override { return schema::kInstPoly; }
+    std::span<const ParamSpec> params() const override { return schema::kInstPolyExt; }
 
     void prepare(double sr, int) override {
         sr_ = static_cast<float>(std::max(sr, 1.0));
@@ -87,6 +88,7 @@ public:
             case LfoShape: lfoShape_ = std::clamp(static_cast<int>(v), 0, 3); break;
             case LfoRate: lfoRate_.setTarget(std::max(v, 0.0f)); break;
             case LfoAmt: lfoAmt_.setTarget(std::clamp(v, 0.0f, 1.0f)); break;
+            case LfoPhase: lfoPhaseOff_ = static_cast<double>(std::clamp(v, 0.0f, 360.0f)) / 360.0; break;
             case Attack: attack_ = std::max(v, 0.0f); syncEnv(); break;
             case Decay: decay_ = std::max(v, 0.0f); syncEnv(); break;
             case Sustain: sustain_ = std::clamp(v, 0.0f, 1.0f); syncEnv(); break;
@@ -159,7 +161,7 @@ public:
 
             // the LFO is gated like makeInstLfo: stopped while lfoAmt ~ 0
             const bool lfoOn = amt > 0.001f;
-            const float lfoV = lfoOn ? lfoShapeValue(kLfoShapeMap[static_cast<size_t>(lfoShape_)], lfoPhase_) : 0.0f;
+            const float lfoV = lfoOn ? lfoShapeValue(kLfoShapeMap[static_cast<size_t>(lfoShape_)], lfoPhase_ + lfoPhaseOff_) : 0.0f;
             if (lfoOn) lfoPhase_ += static_cast<double>(rate) * m / static_cast<double>(sr_);
 
             bool anyActive = false;
@@ -257,7 +259,7 @@ private:
     int wave_ = 0, slope_ = 0, lfoShape_ = 0;
     Smoother spread_, cutoff_, res_, lfoRate_, lfoAmt_;
     float attack_ = 0.01f, decay_ = 0.15f, sustain_ = 0.6f, release_ = 0.4f;
-    double lfoPhase_ = 0.0;
+    double lfoPhase_ = 0.0, lfoPhaseOff_ = 0.0;
     std::array<Svf, 4> stages_{Svf(SvfMode::Lowpass), Svf(SvfMode::Lowpass), Svf(SvfMode::Lowpass), Svf(SvfMode::Lowpass)};
     bool ringing_ = false;
 };

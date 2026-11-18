@@ -12,6 +12,7 @@
 
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
+#include "devices/schema/SchemaExt.h"
 #include "dsp/Lfo.h"
 #include "dsp/Smoother.h"
 #include "dsp/Svf.h"
@@ -21,7 +22,7 @@ namespace {
 
 using namespace ddaw::dsp;
 
-enum P : uint16_t { Rate, Depth, Base, Mix, RateMode, RateSync, RateHi };
+enum P : uint16_t { Rate, Depth, Base, Mix, RateMode, RateSync, RateHi , Phase, Shape };
 
 constexpr float kOctavesPow = 11.313708f;  // 2^3.5
 
@@ -38,7 +39,7 @@ public:
         updateStep();
     }
 
-    std::span<const ParamSpec> params() const override { return schema::kFxAutofilt; }
+    std::span<const ParamSpec> params() const override { return schema::kFxAutofiltExt; }
 
     void prepare(double sr, int) override {
         sr_ = static_cast<float>(std::max(sr, 1.0));
@@ -62,6 +63,8 @@ public:
             case RateMode: rateMode_ = std::clamp(static_cast<int>(v), 0, 2); updateStep(); break;
             case RateSync: rateSync_ = std::clamp(static_cast<int>(v), 0, static_cast<int>(kDivTicks.size()) - 1); updateStep(); break;
             case RateHi: rateHi_ = v; updateStep(); break;
+            case Phase: phaseCyc_ = std::clamp(v, 0.0f, 360.0f) / 360.0f; applyPhase(); break;
+            case Shape: applyShape(static_cast<uint32_t>(std::clamp(static_cast<int>(v), 0, 6))); break;
             default: break;
         }
     }
@@ -115,6 +118,9 @@ private:
     int rateMode_ = 1;  // schema default: Low
     float rateLo_ = 1.0f, rateHi_ = 440.0f;
     int rateSync_ = 5;
+    void applyPhase() { lfo_.setPhaseOffset(phaseCyc_); }
+    void applyShape(uint32_t sh) { lfo_.setShape(sh); }
+    float phaseCyc_ = 0.0f;
     Lfo lfo_;
     Smoother depth_, base_, mix_;
     Svf filtL_{SvfMode::Lowpass}, filtR_{SvfMode::Lowpass};

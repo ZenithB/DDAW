@@ -29,6 +29,8 @@ int main(int argc, char** argv) {
     int w = 1440, h = 900;
     std::string mainTab = "session", detail = "devices", selClip, instrument, lane, pluginId;
     bool returns = false, chordres = false;
+    std::vector<std::string> fxTypes;
+    std::string rollView;
     int selTrack = -1;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -44,6 +46,8 @@ int main(int argc, char** argv) {
         else if (a == "--select-track") selTrack = std::stoi(next());
         else if (a == "--select-clip") selClip = next();
         else if (a == "--plugin") pluginId = next();   // add this hosted plugin (a plugin id) as an effect to the selected track
+        else if (a == "--roll") rollView = next();   // piano roll helpers: a comma list of key, ghost, fold, draw, paint, chord, erase, slice, select
+        else if (a == "--fx") fxTypes.push_back(next());   // add this effect (a device type) to the selected track
         else if (a == "--chordres") chordres = true;   // add a chord resonator (a maj7 voicing, boosted) to the selected track
         else if (a == "--returns") returns = true;   // add send returns A and B and some sends, to see the mixer with them
         else if (a == "--lane") lane = next();   // piano roll lane: slide | pressure | bend (with some curves drawn on the first notes)
@@ -135,6 +139,7 @@ int main(int argc, char** argv) {
         model.apply(app::edit::addReturnBus(model.project(), project::SendBus::B));
         for (size_t i = 1; i < 4 && i < model.project().tracks.size(); ++i) model.apply(document::cmd::setTrack(model.project().tracks[i].uid, "sendA", 0.25 * double(i)));
     }
+    for (const auto& t : fxTypes) if (model.selection().track) model.apply(app::edit::addDevice(model.project(), model.selection().track, "fx", t));
     if (chordres && model.selection().track) {
         model.apply(app::edit::addDevice(model.project(), model.selection().track, "fx", "chordres"));
         const auto* t = app::edit::findTrack(model.project(), model.selection().track);
@@ -167,6 +172,22 @@ int main(int argc, char** argv) {
     }
     main.showDetail(detail == "morph" ? ui::MainComponent::DetailTab::Morph : detail == "arate" ? ui::MainComponent::DetailTab::AudioRate : detail == "mod" ? ui::MainComponent::DetailTab::Modulation : detail == "clip" ? ui::MainComponent::DetailTab::Clip : detail == "input" ? ui::MainComponent::DetailTab::Input : ui::MainComponent::DetailTab::Devices);
     main.resized();
+    if (!rollView.empty()) {
+        auto& ed = main.clipEditor();
+        for (size_t at = 0; at < rollView.size();) {
+            auto comma = rollView.find(',', at);
+            const std::string w = rollView.substr(at, comma == std::string::npos ? std::string::npos : comma - at);
+            if (w == "key") ed.setScaleHighlight(true);
+            else if (w == "ghost") ed.setGhost(true);
+            else if (w == "draw") ed.setTool(ui::ClipEditor::Tool::Draw);
+            else if (w == "paint") ed.setTool(ui::ClipEditor::Tool::Paint);
+            else if (w == "chord") ed.setTool(ui::ClipEditor::Tool::Chord);
+            else if (w == "erase") ed.setTool(ui::ClipEditor::Tool::Erase);
+            else if (w == "slice") ed.setTool(ui::ClipEditor::Tool::Slice);
+            if (comma == std::string::npos) break;
+            at = comma + 1;
+        }
+    }
     if (!lane.empty()) {
         main.clipEditor().setLane(lane == "bend" ? ui::ClipEditor::Lane::Bend : lane == "slide" ? ui::ClipEditor::Lane::Slide : ui::ClipEditor::Lane::Pressure);
         main.clipEditor().selectAll();

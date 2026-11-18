@@ -12,6 +12,8 @@
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
 #include "dsp/DelayLine.h"
+#include "devices/schema/SchemaExt.h"
+#include "dsp/FxBits.h"
 #include "dsp/Smoother.h"
 #include "dsp/Svf.h"
 
@@ -20,7 +22,7 @@ namespace {
 
 using namespace ddaw::dsp;
 
-enum P : uint16_t { Decay, Predelay, Damp, Mix };
+enum P : uint16_t { Decay, Predelay, Damp, Mix, Lowcut, Duck };
 
 constexpr int kN = 8;
 constexpr float kLineMs[kN] = {7.9f, 11.3f, 13.7f, 17.9f, 21.3f, 26.1f, 31.7f, 38.3f};
@@ -57,7 +59,7 @@ public:
         prepare(44100.0, 128);
     }
 
-    std::span<const ParamSpec> params() const override { return schema::kFxPlate; }
+    std::span<const ParamSpec> params() const override { return schema::kFxPlateExt; }
 
     void prepare(double sr, int) override {
         sr_ = std::max(static_cast<float>(sr), 1.0f);
@@ -71,6 +73,7 @@ public:
         }
         dampL_.prepare(sr_);
         dampR_.prepare(sr_);
+        cutL_.prepare(sr_); cutR_.prepare(sr_); duck_.prepare(sr_);
         for (Smoother* s : {&decay_, &predelay_, &damp_, &mix_}) s->prepare(sr_, 15.0f);
         tiltPrevL_ = tiltPrevR_ = 0.0f;
         updateDecayGains(decay_.current());
@@ -82,6 +85,8 @@ public:
             case Predelay: predelay_.setTarget(std::clamp(v, 0.0f, 0.2f)); break;
             case Damp: damp_.setTarget(std::clamp(v, 100.0f, 18000.0f)); break;
             case Mix: mix_.setTarget(std::clamp(v, 0.0f, 1.0f)); break;
+            case Lowcut: cutL_.set(v); cutR_.set(v); break;
+            case Duck: duckAmt_ = std::clamp(v, 0.0f, 1.0f); break;
             default: break;
         }
     }
@@ -134,8 +139,9 @@ public:
             tiltPrevL_ = wetL;
             const float tr = wetR - kTilt * tiltPrevR_;
             tiltPrevR_ = wetR;
-            const float wl = dampL_.processSample(tl) * wetNorm_;
-            const float wr = dampR_.processSample(tr) * wetNorm_;
+            const float duckG = duck_.gain(std::max(std::abs(xl), std::abs(xr)), duckAmt_);
+            const float wl = cutL_.process(dampL_.processSample(tl) * wetNorm_) * duckG;
+            const float wr = cutR_.process(dampR_.processSample(tr) * wetNorm_) * duckG;
 
             const float m = mix_.next();
             l[i] = (1.0f - m) * xl + m * wl;
@@ -150,6 +156,7 @@ public:
         for (auto& line : lines_) line.clear();
         dampL_.reset();
         dampR_.reset();
+        cutL_.reset(); cutR_.reset(); duck_.reset();
         tiltPrevL_ = tiltPrevR_ = 0.0f;
         for (Smoother* s : {&decay_, &predelay_, &damp_, &mix_}) s->snap(s->target());
         updateDecayGains(decay_.current());
@@ -173,6 +180,9 @@ private:
     std::array<int, kN> lineLen_{};
     std::array<float, kN> gains_{};
     float wetNorm_ = kWetNorm;
+    LowCut cutL_, cutR_;
+    WetDuck duck_;
+    float duckAmt_ = 0.0f;
     float tiltPrevL_ = 0.0f, tiltPrevR_ = 0.0f;
     Svf dampL_{SvfMode::Lowpass}, dampR_{SvfMode::Lowpass};
     Smoother decay_, predelay_, damp_, mix_;

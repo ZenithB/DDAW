@@ -86,6 +86,7 @@ void AppModel::selectTrack(project::Uid uid) {
 void AppModel::selectClip(const edit::ClipRef& r) {
     sel_.clip = r;
     if (r.valid()) {
+        ++sel_.clipOpens;
         if (r.arrKey.empty()) { sel_.track = r.track; sel_.scene = r.scene; }
         else if (auto it = project().arr.find(r.arrKey); it != project().arr.end())
             if (const auto* t = edit::findTrackById(project(), it->second.trackId)) sel_.track = t->uid;
@@ -317,14 +318,21 @@ static bool fxSlotOf(const project::Project& p, project::Uid uid, int& track, in
     return false;
 }
 
+// The meter slots are by position in the graph that is running. While a rebuilt graph (a track deleted or inserted, a device moved) is
+// still on its way, the document's positions no longer match it: read nothing rather than another track's effect.
+bool AppModel::metersMatchDocument() const {
+    const uint32_t live = engine_.liveEpoch();
+    return live == 0 || (!svc_.busy() && live == svc_.publishedEpoch());       // no graph running yet: nothing to mix up
+}
+
 float AppModel::reductionDb(project::Uid uid, int band) const {
     int t, s;
-    return fxSlotOf(project(), uid, t, s) ? engine_.meters().fxGr(t, s, band) : 0.0f;
+    return metersMatchDocument() && fxSlotOf(project(), uid, t, s) ? engine_.meters().fxGr(t, s, band) : 0.0f;
 }
 
 float AppModel::deviceValue(project::Uid uid) const {
     int t, s;
-    return fxSlotOf(project(), uid, t, s) ? engine_.meters().fxInfo(t, s) : -1.0f;
+    return metersMatchDocument() && fxSlotOf(project(), uid, t, s) ? engine_.meters().fxInfo(t, s) : -1.0f;
 }
 
 // ---- hosted plugins ----

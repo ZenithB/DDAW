@@ -259,17 +259,21 @@ void Graph::relocateAll(TransportMode mode, double now) noexcept {
 void Graph::inheritNotes(const Graph& old) noexcept {
     for (size_t i = 0; i < old.nActive_; ++i) {
         const Active& a = old.active_[i];
-        if (a.track < tracks_.size()) noteOn(a.track, a.pitch, a.vel, a.noteId);
+        const int t = indexOfTrackFrom(old, a.track);                  // the track may have moved, or be gone
+        if (t >= 0) noteOn(static_cast<uint16_t>(t), a.pitch, a.vel, a.noteId);
     }
-    for (size_t i = 0; i < old.nGates_; ++i)
-        if (old.gates_[i].track < tracks_.size()) scheduleGate(old.gates_[i].frame, old.gates_[i].track, old.gates_[i].noteId);
+    for (size_t i = 0; i < old.nGates_; ++i) {
+        const int t = indexOfTrackFrom(old, old.gates_[i].track);
+        if (t >= 0) scheduleGate(old.gates_[i].frame, static_cast<uint16_t>(t), old.gates_[i].noteId);
+    }
     // A sounding note keeps playing its curves, as edited: they are found again by the note's identity. The note's timing
     // stays what it was when it started. A note whose curves are gone (or which was deleted) just holds neutral expression.
     for (size_t i = 0; i < old.nPlayers_; ++i) {
         const ExprPlayer& p = old.players_[i];
         const int seq = p.uid ? findExprSeq(p.uid) : -1;
-        if (seq < 0 || p.track >= tracks_.size() || nPlayers_ >= kMaxExprPlayers) continue;
-        players_[nPlayers_++] = {p.track, p.noteId, p.start, p.end, seq, {1e30f, 1e30f, 1e30f}, {0, 0, 0}, p.uid};   // `last` reset: the new voice gets the current values at once
+        const int pt = indexOfTrackFrom(old, p.track);
+        if (seq < 0 || pt < 0 || nPlayers_ >= kMaxExprPlayers) continue;
+        players_[nPlayers_++] = {static_cast<uint16_t>(pt), p.noteId, p.start, p.end, seq, {1e30f, 1e30f, 1e30f}, {0, 0, 0}, p.uid};   // `last` reset: the new voice gets the current values at once
     }
 }
 

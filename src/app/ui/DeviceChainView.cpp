@@ -1,6 +1,7 @@
 #include "app/ui/DeviceChainView.h"
 
 #include "app/ui/ChordResonatorView.h"
+#include "app/ui/FxView.h"
 #include "project/ProjectJson.h"
 
 namespace ddaw::ui {
@@ -25,13 +26,18 @@ public:
         label_ = info_ ? info_->label : (plugin_ ? (d.pluginName.empty() ? juce::String("Plugin") : juce::String(d.pluginName)) : d.type);
         const int rows = std::max(1, (availH - kPanelHeader - kPad - (special() ? 26 : 0)) / kKnobH);
         custom_ = d.type == "chordres" && info_ && !info_->params.empty();    // a picture of the chord, not a grid of knobs
-        const size_t n = custom_ ? 0 : info_ ? (plugin_ ? std::min(info_->params.size(), kMaxPluginKnobs) : info_->params.size()) : 0;
+        if (!custom_ && info_ && chain == app::Chain::Effect && !plugin_) fx_ = FxView::make(model_, uid_, *info_, availH - (special() ? 26 : 0));     // every other effect has a picture too
+        if (custom_ || fx_) meterBands_ = 0;                                   // the picture shows its own gain reduction
+        const size_t n = (custom_ || fx_) ? 0 : info_ ? (plugin_ ? std::min(info_->params.size(), kMaxPluginKnobs) : info_->params.size()) : 0;
         const int cols = n ? int((n + size_t(rows) - 1) / size_t(rows)) : 0;
         width_ = std::max(150, cols * kKnobW + 2 * kPad + (meterBands_ ? meterBands_ * kMeterW + 10 : 0));
         if (custom_) {
             width_ = ChordResonatorView::kWidth + 2 * kPad;
             body_ = std::make_unique<ChordResonatorView>(model_, uid_, *info_);
             addAndMakeVisible(*body_);
+        } else if (fx_) {
+            width_ = std::max(width_, fx_->preferredWidth() + 2 * kPad);
+            addAndMakeVisible(*fx_);
         }
         if (chain != app::Chain::Instrument) { for (juce::Component* c : std::initializer_list<juce::Component*>{&power_, &left_, &right_, &close_}) addAndMakeVisible(c); }
         power_.setToggleable(true);
@@ -71,6 +77,7 @@ public:
     // The gain-reduction bars follow the engine: repaint when a value moved.
     void updateMeters() {
         if (body_) body_->tick();
+        if (fx_) fx_->tick();
         if (!meterBands_) return;
         bool changed = false;
         for (int b = 0; b < meterBands_; ++b) {
@@ -90,6 +97,7 @@ public:
     }
     void sync(const project::DeviceSpec& d) {
         if (body_) body_->sync(d);
+        if (fx_) fx_->sync(d);
         if (info_)
             for (size_t i = 0; i < knobs_.size(); ++i) {
                 if (plugin_) {
@@ -129,6 +137,7 @@ public:
         power_.setBounds(h.removeFromLeft(20));
         if (extra_) extra_->setBounds(kPad, getHeight() - 26, getWidth() - 2 * kPad, 20);
         if (body_) body_->setBounds(kPad, kPanelHeader + 2, getWidth() - 2 * kPad, std::max(40, getHeight() - kPanelHeader - kPad - 2));
+        if (fx_) fx_->setBounds(kPad, kPanelHeader + 2, getWidth() - 2 * kPad, std::max(40, getHeight() - kPanelHeader - kPad - 2 - (special() ? 26 : 0)));
     }
     void paint(juce::Graphics& g) override {
         auto r = getLocalBounds().toFloat().reduced(1.0f);
@@ -302,6 +311,7 @@ private:
     std::string type_;
     bool plugin_ = false, keyable_ = false, custom_ = false;
     std::unique_ptr<ChordResonatorView> body_;
+    std::unique_ptr<FxView> fx_;
     int meterBands_ = 0;
     std::array<float, 3> reduction_{};
     const app::DeviceInfo* info_ = nullptr;

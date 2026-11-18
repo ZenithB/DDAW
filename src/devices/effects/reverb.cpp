@@ -12,6 +12,8 @@
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
 #include "dsp/DelayLine.h"
+#include "devices/schema/SchemaExt.h"
+#include "dsp/FxBits.h"
 #include "dsp/Smoother.h"
 
 namespace ddaw::devices {
@@ -19,7 +21,7 @@ namespace {
 
 using namespace ddaw::dsp;
 
-enum P : uint16_t { Size, Mix };
+enum P : uint16_t { Size, Mix, Predelay, Tone, Lowcut, Duck };
 
 constexpr int kLines = 8;
 constexpr float kLineMs[kLines] = {29.7f, 37.1f, 41.1f, 43.7f, 53.3f, 59.5f, 61.7f, 68.3f};
@@ -33,7 +35,7 @@ class ReverbFx final : public EffectDevice {
 public:
     ReverbFx() { prepare(44100.0, 128); }
 
-    std::span<const ParamSpec> params() const override { return schema::kFxReverb; }
+    std::span<const ParamSpec> params() const override { return schema::kFxReverbExt; }
 
     void prepare(double sr, int) override {
         sr_ = std::max(static_cast<float>(sr), 1.0f);
@@ -41,9 +43,11 @@ public:
             delaySamps_[size_t(k)] = std::max(static_cast<int>(kLineMs[k] * 1e-3f * sr_), 1);
             lines_[size_t(k)].prepare(delaySamps_[size_t(k)] + 1);
         }
-        preSamps_ = std::max(static_cast<int>(kPreDelaySec * sr_), 1);
-        preL_.prepare(preSamps_ + 1);
-        preR_.prepare(preSamps_ + 1);
+        preSamps_ = std::max(static_cast<int>(preSec_ * sr_), 1);
+        const int preMax = std::max(static_cast<int>(0.2f * sr_), 1) + 1;                 // up to 200 ms of pre-delay
+        preL_.prepare(preMax + 1);
+        preR_.prepare(preMax + 1);
+        toneL_.prepare(sr_); toneR_.prepare(sr_); cutL_.prepare(sr_); cutR_.prepare(sr_); duck_.prepare(sr_);
         for (auto& g : fbGain_) g.prepare(sr_, 15.0f);
         tapGain_.prepare(sr_, 15.0f);
         mix_.prepare(sr_, 15.0f);
@@ -55,6 +59,10 @@ public:
         switch (index) {
             case Size: size_ = std::clamp(v, kSizeMin, kSizeMax); updateFbTargets(); break;
             case Mix: mix_.setTarget(std::clamp(v, 0.0f, 1.0f)); break;
+            case Predelay: preSec_ = std::clamp(v, 0.0f, 0.2f); preSamps_ = std::max(static_cast<int>(preSec_ * sr_), 1); break;
+            case Tone: toneL_.set(v); toneR_.set(v); break;
+            case Lowcut: cutL_.set(v); cutR_.set(v); break;
+            case Duck: duckAmt_ = std::clamp(v, 0.0f, 1.0f); break;
             default: break;
         }
     }
@@ -73,8 +81,8 @@ public:
 
             // decorrelated stereo taps: orthogonal sign patterns over the lines
             const float tap = tapGain_.next();
-            const float wetL = tap * (v[0] - v[1] + v[2] - v[3] + v[4] - v[5] + v[6] - v[7]);
-            const float wetR = tap * (v[0] + v[1] - v[2] - v[3] + v[4] + v[5] - v[6] - v[7]);
+            float wetL = tap * (v[0] - v[1] + v[2] - v[3] + v[4] - v[5] + v[6] - v[7]);
+            float wetR = tap * (v[0] + v[1] - v[2] - v[3] + v[4] + v[5] - v[6] - v[7]);
 
             hadamard8(v);
             for (size_t k = 0; k < kLines; ++k) {
@@ -84,6 +92,10 @@ public:
             }
 
             // LINEAR dry/wet (the golden path is Gain(mix) wet + Gain(1-mix) dry)
+            wetL = cutL_.process(toneL_.process(wetL));                       // tone and low cut shape the tail only (both straight wires by default)
+            wetR = cutR_.process(toneR_.process(wetR));
+            const float duckG = duck_.gain(std::max(std::abs(dryL), std::abs(dryR)), duckAmt_);
+            wetL *= duckG; wetR *= duckG;
             const float m = mix_.next();
             l[i] = dryL * (1.0f - m) + wetL * m;
             r[i] = dryR * (1.0f - m) + wetR * m;
@@ -94,6 +106,7 @@ public:
         for (auto& line : lines_) line.clear();
         preL_.clear();
         preR_.clear();
+        toneL_.reset(); toneR_.reset(); cutL_.reset(); cutR_.reset(); duck_.reset();
         for (auto& g : fbGain_) g.snap(g.target());
         tapGain_.snap(tapGain_.target());
         mix_.snap(mix_.target());
@@ -137,6 +150,10 @@ private:
     Smoother tapGain_, mix_;
     DelayLine preL_, preR_;
     int preSamps_ = 1;
+    float preSec_ = kPreDelaySec, duckAmt_ = 0.0f;
+    ToneLp toneL_, toneR_;
+    LowCut cutL_, cutR_;
+    WetDuck duck_;
     float size_ = 2.2f;
 };
 

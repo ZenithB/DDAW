@@ -12,6 +12,7 @@
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
 #include "dsp/DelayLine.h"
+#include "devices/schema/SchemaExt.h"
 #include "dsp/Lfo.h"
 #include "dsp/Smoother.h"
 
@@ -20,7 +21,7 @@ namespace {
 
 using namespace ddaw::dsp;
 
-enum P : uint16_t { Rate, Depth, Mix, RateMode, RateSync, RateHi };
+enum P : uint16_t { Rate, Depth, Mix, RateMode, RateSync, RateHi , Phase, Shape };
 
 constexpr float kMaxDelaySec = 0.005f;                  // Tone.Vibrato default maxDelay
 constexpr float kCenterSec = kMaxDelaySec * 0.5f;
@@ -58,7 +59,7 @@ public:
         applyRate();
     }
 
-    std::span<const ParamSpec> params() const override { return schema::kFxVib; }
+    std::span<const ParamSpec> params() const override { return schema::kFxVibExt; }
 
     void prepare(double sr, int) override {
         sr_ = static_cast<float>(std::max(sr, 1.0));
@@ -82,6 +83,8 @@ public:
             case RateHi: rate_.hi = v; applyRate(); break;
             case Depth: depth_.setTarget(std::clamp(v, 0.0f, 1.0f)); break;
             case Mix: mix_.setTarget(std::clamp(v, 0.0f, 1.0f)); break;
+            case Phase: phaseCyc_ = std::clamp(v, 0.0f, 360.0f) / 360.0f; applyPhase(); break;
+            case Shape: applyShape(static_cast<uint32_t>(std::clamp(static_cast<int>(v), 0, 6))); break;
             default: break;
         }
     }
@@ -117,6 +120,9 @@ private:
     void applyRate() { lfo_.setFreq(rate_.hz()); }
     RateState rate_;
     float sr_ = 44100.0f;
+    void applyPhase() { lfo_.setPhaseOffset(-0.25f + phaseCyc_); }
+    void applyShape(uint32_t sh) { lfo_.setShape(sh); }
+    float phaseCyc_ = 0.0f;
     Lfo lfo_;
     Smoother depth_, mix_;
     DelayLine lineL_, lineR_;

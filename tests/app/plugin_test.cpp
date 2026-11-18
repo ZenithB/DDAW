@@ -267,8 +267,8 @@ TEST_CASE("plugins (ui): a plugin's panel has knobs for its parameters that driv
     v.refresh(app::ModelEvent::Selection);
     std::vector<ui::Knob*> knobs;
     findAll(v, knobs);
-    REQUIRE(knobs.size() == 12 + 2);                              // the track's Poly Synth, then the two parameters the fake host exposes
-    knobs[12]->onChange(0.7);
+    REQUIRE(knobs.size() == 13 + 2);                              // the track's Poly Synth, then the two parameters the fake host exposes
+    knobs[13]->onChange(0.7);
     CHECK(r.host.set.at(0) == Approx(0.7f));
     CHECK(r.m->project().tracks[0].fx[0].params.empty());         // a plugin's values live in the plugin, not the project map
     std::vector<ui::Chip*> chips;
@@ -290,7 +290,7 @@ TEST_CASE("plugins (ui): a plugin that is not loaded shows an empty panel, and f
     v.refresh(app::ModelEvent::Selection);
     std::vector<ui::Knob*> knobs;
     findAll(v, knobs);
-    CHECK(knobs.size() == 12);                                    // only the instrument's
+    CHECK(knobs.size() == 13);                                    // only the instrument's
     CHECK(v.panelCount() == 2);
     // the plugin becomes available (a rescan found it): the panel is rebuilt with its parameters
     r.host.unloadable.clear();
@@ -299,7 +299,7 @@ TEST_CASE("plugins (ui): a plugin that is not loaded shows an empty panel, and f
     v.refresh(app::ModelEvent::Document);
     knobs.clear();
     findAll(v, knobs);
-    CHECK(knobs.size() == 12 + 2);
+    CHECK(knobs.size() == 13 + 2);
 }
 
 TEST_CASE("plugins (app): a real AudioUnit added through the model loads, shows its parameters, and comes back from a saved project with its settings", "[plugins]") {

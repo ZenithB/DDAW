@@ -39,6 +39,15 @@ public:
     // instead of the input - a sidechain: the gain it finds is applied to l/r.
     void process(float* l, float* r, int n, const float* keyL = nullptr, const float* keyR = nullptr) noexcept;
 
+    // The static curve (what the UI draws): output level in dB for an input level in dB, makeup gain included.
+    struct StaticCurve {
+        StaticCurve(float threshDb, float ratio);
+        float outDb(float inDb) const noexcept;
+        float makeupDb = 0.0f;
+    private:
+        float linThresh_, kneeThresh_, kneeThreshDb_, yKneeDb_, slope_, k_;
+    };
+
     float grDb() const noexcept { return std::min(meteringGain_, 0.0f); }  // the node's `reduction`
     int latencySamples() const noexcept { return preDelayFrames_; }
 

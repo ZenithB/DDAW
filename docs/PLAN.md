@@ -405,3 +405,12 @@ Done: return strips in the mixer (a returns group, "+ Return", built-in returns 
 ### Bus sends, value names and the chord resonator (2026-11-18)
 
 Done: bus-to-bus and track-to-bus sends with a send knob and a target chip in the mixer (ARCH 25); words instead of numbers for stepped parameters across the catalog (ARCH 25); the chord resonator (ARCH 26): a smart resonant effect that reads the played note (or the audio, by FFT) and rings up to six steep filters at equal-tempered intervals above it, with a built-in exciter, boost-driven compression and headroom, a final saturation stage and a graphic panel of draggable beads. Not verified: the chord resonator has no listening test (its tests are analytic: placement, steepness, bandwidth, headroom, bit-exact bypass, block-size invariance, no allocation), and the audio-source tracker has only been tried on synthetic harmonic tones.
+
+### Effect pictures, new effect controls, and the track-deletion fix (2026-11-19)
+
+Done: a graphic panel for every audio effect (ARCH 27), phase and shape on every LFO, tone/duck/wobble on the delays, pre-delay/tone/low cut/duck on the reverbs, millisecond display of attack/release/hold, depth 0-100, and the fix for clips, notes and monitoring landing on the wrong track after a track in front was deleted. Not verified: the pictures have been looked at in headless screenshots and driven by synthetic mouse events, not used for a session; the "effects are mixed around" part of the track-deletion report is explained by the carried notes and monitoring, but only the clip and note cases are reproduced by a test.
+
+### Piano roll tools (2026-11-19)
+
+Done: the note editor now has Select, Draw, Paint, Erase, Slice and Chord tools, snap with a magnet and Alt bypass, triplets, key highlighting and snapping, ghost notes, an edit menu with note operations, clipboard, velocity painting, resize from the left, copy-drag and axis lock (ARCH 28), researched against Ableton's note editor and FL Studio's piano roll (the Ableton manual page could not be fetched, so its details come from search summaries and memory). Not verified: the editor has been driven by synthetic mouse events and looked at in headless screenshots only; fold, note mute and a properties dialog are not built.
+

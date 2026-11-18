@@ -210,7 +210,23 @@ public:
     void setTrackMonitor(uint16_t track, bool on) noexcept { if (track < tracks_.size()) tracks_[track].monitorIn = on; }
     bool trackMonitor(int track) const noexcept { return track >= 0 && size_t(track) < tracks_.size() && tracks_[size_t(track)].monitorIn; }
     // Graph swap: keep monitoring switched on for the tracks that had it.
-    void inheritMonitors(const Graph& old) noexcept { for (size_t i = 0; i < tracks_.size() && i < old.tracks_.size(); ++i) tracks_[i].monitorIn = old.tracks_[i].monitorIn; }
+    // A rebuilt graph's tracks may have moved (a track in front was deleted or inserted): what is carried over from the old graph follows
+    // the track (by id), never the position. The index of the track of this graph that `old`'s track `oldIndex` is, or -1 if it is gone.
+    int indexOfTrackFrom(const Graph& old, size_t oldIndex) const noexcept {
+        if (oldIndex >= old.tracks_.size()) return -1;
+        const std::string& id = old.tracks_[oldIndex].id;
+        for (size_t i = 0; i < tracks_.size(); ++i) if (tracks_[i].id == id) return static_cast<int>(i);
+        return -1;
+    }
+    // The index in `old` of this graph's track `index`, or -1 if the track is new.
+    int indexInOf(const Graph& old, size_t index) const noexcept {
+        if (index >= tracks_.size()) return -1;
+        for (size_t j = 0; j < old.tracks_.size(); ++j) if (old.tracks_[j].id == tracks_[index].id) return static_cast<int>(j);
+        return -1;
+    }
+    void inheritMonitors(const Graph& old) noexcept {
+        for (size_t i = 0; i < tracks_.size(); ++i) { const int j = indexInOf(old, i); tracks_[i].monitorIn = j >= 0 && old.tracks_[size_t(j)].monitorIn; }
+    }
     void allNotesOff() noexcept;
     // A scheduled note with expression curves has just started at transport tick `startTick`: play them while it lasts
     // (`durTicks`). updateExpression(now) sends each playing note's curve values for the chunk about to render.

@@ -68,6 +68,7 @@ private:
     MorphPanel morph_;
     MainTab mainTab_ = MainTab::Session;
     DetailTab detailTab_ = DetailTab::Devices;
+    uint64_t seenClipOpens_ = 0;
     int detailH_ = 300;
     bool draggingSplit_ = false;
     juce::Rectangle<int> mainStrip_, detailStrip_, splitRect_;

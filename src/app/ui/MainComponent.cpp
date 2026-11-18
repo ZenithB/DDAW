@@ -29,8 +29,11 @@ void MainComponent::onModel(app::ModelEvent e) {
     mod_.refresh(e);
     arate_.refresh(e);
     morph_.refresh(e);
-    // opening a clip brings its editor forward
-    if (e == app::ModelEvent::Selection && model_.selection().clip.valid() && detailTab_ != DetailTab::Clip) showDetail(DetailTab::Clip);
+    // opening a clip brings its editor forward; selecting a device (or clicking empty space in the device pane) does not
+    if (e == app::ModelEvent::Selection && model_.selection().clipOpens != seenClipOpens_) {
+        seenClipOpens_ = model_.selection().clipOpens;
+        if (model_.selection().clip.valid() && detailTab_ != DetailTab::Clip) showDetail(DetailTab::Clip);
+    }
     if (e == app::ModelEvent::Transport && model_.arrangementMode() && model_.meters().playing && mainTab_ == MainTab::Session) {}
     if (e == app::ModelEvent::Recording || e == app::ModelEvent::Document) { if (!model_.status().empty()) { status_ = model_.status(); } }
     repaint();

@@ -207,4 +207,22 @@ void CompKernel::process(float* l, float* r, int n, const float* keyL, const flo
     }
 }
 
+CompKernel::StaticCurve::StaticCurve(float threshDb, float ratio) {
+    threshDb = std::clamp(threshDb, -100.0f, 0.0f);
+    ratio = std::clamp(ratio, 1.0f, 20.0f);
+    linThresh_ = dbToLin(threshDb);
+    slope_ = 1.0f / ratio;
+    kneeThreshDb_ = threshDb + kKneeDb;
+    kneeThresh_ = dbToLin(kneeThreshDb_);
+    k_ = kAtSlope(linThresh_, threshDb, slope_);
+    yKneeDb_ = linToDb(kneeCurve(linThresh_, kneeThresh_, k_));
+    makeupDb = -0.6f * outDb(0.0f);                              // the node's makeup: (1 / Saturate(1))^0.6
+}
+
+float CompKernel::StaticCurve::outDb(float inDb) const noexcept {
+    const float x = dbToLin(inDb);
+    if (x < kneeThresh_) return linToDb(kneeCurve(linThresh_, x, k_)) + makeupDb;
+    return yKneeDb_ + slope_ * (inDb - kneeThreshDb_) + makeupDb;
+}
+
 }  // namespace ddaw::dsp

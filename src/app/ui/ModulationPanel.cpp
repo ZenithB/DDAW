@@ -15,6 +15,7 @@ namespace {
 const char* const kShapes[] = {"Sine", "Triangle", "Saw up", "Saw down", "Square", "Sample&Hold", "Smooth rand"};
 const char* const kDivs[] = {"8 bars", "4 bars", "2 bars", "1 bar", "1/2", "1/4", "1/8", "1/8 T", "1/16"};
 const ParamSpec kDepthSpec{0, "depth", 0.0f, 1.0f, 0.5f, Curve::Linear, 0, false};
+const ParamSpec kPhaseSpec{0, "phase", 0.0f, 360.0f, 0.0f, Curve::Linear, 0, false};     // degrees; the project keeps cycles
 const ParamSpec kMacroSpec{0, "macro", 0.0f, 1.0f, 0.0f, Curve::Linear, 0, false};
 
 }  // namespace
@@ -22,10 +23,10 @@ const ParamSpec kMacroSpec{0, "macro", 0.0f, 1.0f, 0.0f, Curve::Linear, 0, false
 // ============================================================ LFO row
 class ModulationPanel::LfoRow : public juce::Component {
 public:
-    LfoRow(app::AppModel& m, project::Uid track, int index) : model_(m), track_(track), idx_(index), depth_(kDepthSpec, "Depth") {
+    LfoRow(app::AppModel& m, project::Uid track, int index) : model_(m), track_(track), idx_(index), depth_(kDepthSpec, "Depth"), phase_(kPhaseSpec, "Phase") {
         const auto* t = trackOf(m, track);
         const auto& l = t->lfos[size_t(index)];
-        for (juce::Component* c : std::initializer_list<juce::Component*>{&on_, &shape_, &sync_, &div_, &rate_, &depth_, &targets_, &del_}) addAndMakeVisible(c);
+        for (juce::Component* c : std::initializer_list<juce::Component*>{&on_, &shape_, &sync_, &div_, &rate_, &depth_, &phase_, &targets_, &del_}) addAndMakeVisible(c);
         on_.setToggleable(true); sync_.setToggleable(true);
         on_.onToggle = [this](bool v) { edit([v](project::LfoSpec& s) { s.on = v; }); };
         sync_.onToggle = [this](bool v) { edit([v](project::LfoSpec& s) { s.sync = v; }); };
@@ -34,6 +35,9 @@ public:
         depth_.onBegin = [this] { model_.beginGesture("lfo depth"); };
         depth_.onChange = [this](double v) { model_.apply({"lfo.field", {{"track", track_}, {"index", idx_}, {"field", "depth"}, {"value", v}}}); };
         depth_.onEnd = [this] { model_.endGesture(); };
+        phase_.onBegin = [this] { model_.beginGesture("lfo phase"); };
+        phase_.onChange = [this](double v) { model_.apply({"lfo.field", {{"track", track_}, {"index", idx_}, {"field", "phase"}, {"value", v / 360.0}}}); };
+        phase_.onEnd = [this] { model_.endGesture(); };
         rate_.onBegin = [this] { model_.beginGesture("lfo rate"); };
         rate_.onChange = [this](double v) { model_.apply({"lfo.field", {{"track", track_}, {"index", idx_}, {"field", "hz"}, {"value", v}}}); };
         rate_.onEnd = [this] { model_.endGesture(); };
@@ -51,6 +55,8 @@ public:
         rate_.setValue(l.hz);
         depth_.setValue(l.depth);
         depth_.setStored(true);
+        phase_.setValue(l.phase * 360.0);
+        phase_.setStored(true);
         targets_.setText(l.targets.empty() ? juce::String("no targets") : juce::String(int(l.targets.size())) + (l.targets.size() == 1 ? " target" : " targets"));
         on_.setAlpha(1.0f);
     }
@@ -62,6 +68,7 @@ public:
         auto rate = r.removeFromLeft(72).withHeight(24).withY(r.getY() + 14);
         div_.setBounds(rate); rate_.setBounds(rate); r.removeFromLeft(4);
         depth_.setBounds(r.removeFromLeft(54)); r.removeFromLeft(4);
+        phase_.setBounds(r.removeFromLeft(54)); r.removeFromLeft(4);
         targets_.setBounds(r.removeFromLeft(80).withHeight(24).withY(r.getY() + 14)); r.removeFromLeft(4);
         del_.setBounds(r.removeFromLeft(22).withHeight(24).withY(r.getY() + 14));
     }
@@ -96,7 +103,7 @@ private:
     int idx_;
     Chip on_{"ON", col::play}, shape_{"Sine"}, sync_{"SYNC"}, div_{"1 bar"}, targets_{"no targets"}, del_{"x"};
     NumberBox rate_{0.01, 30.0, 2, " Hz"};
-    Knob depth_;
+    Knob depth_, phase_;
 };
 
 // ============================================================ macro row

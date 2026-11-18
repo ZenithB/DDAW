@@ -25,8 +25,8 @@ std::vector<DeviceInfo> build() {
     using namespace schema;
     using C = Chain;
     return {
-        {"poly", "Poly Synth", "Synth", C::Instrument, sp(kInstPoly)},
-        {"mono", "Mono Synth", "Synth", C::Instrument, sp(kInstMono)},
+        {"poly", "Poly Synth", "Synth", C::Instrument, sp(kInstPolyExt)},
+        {"mono", "Mono Synth", "Synth", C::Instrument, sp(kInstMonoExt)},
         {"duo", "Duo", "Synth", C::Instrument, sp(kInstDuo)},
         {"fm", "FM", "Synth", C::Instrument, sp(kInstFm)},
         {"fmop", "FM Operators", "Synth", C::Instrument, sp(kInstFmop)},
@@ -48,21 +48,21 @@ std::vector<DeviceInfo> build() {
         {"eq", "EQ Three", "EQ and Filter", C::Effect, sp(kFxEq)},
         {"eq7", "EQ Seven", "EQ and Filter", C::Effect, sp(kFxEq7)},
         {"filter", "Filter", "EQ and Filter", C::Effect, sp(kFxFilter)},
-        {"autofilt", "Auto Filter", "EQ and Filter", C::Effect, sp(kFxAutofilt)},
+        {"autofilt", "Auto Filter", "EQ and Filter", C::Effect, sp(kFxAutofiltExt)},
         {"comp", "Compressor", "Dynamics", C::Effect, sp(kFxComp)},
         {"opto", "Opto Compressor", "Dynamics", C::Effect, sp(kFxOpto)},
         {"mbcomp", "Multiband Comp", "Dynamics", C::Effect, sp(kFxMbcomp)},
         {"gate", "Gate", "Dynamics", C::Effect, sp(kFxGate)},
         {"duck", "Ducker", "Dynamics", C::Effect, sp(kFxDuck)},
-        {"delay", "Delay", "Time", C::Effect, sp(kFxDelay)},
-        {"pingpong", "Ping Pong", "Time", C::Effect, sp(kFxPingpong)},
-        {"reverb", "Reverb", "Time", C::Effect, sp(kFxReverb)},
-        {"plate", "Plate", "Time", C::Effect, sp(kFxPlate)},
-        {"chorus", "Chorus", "Modulation", C::Effect, sp(kFxChorus)},
-        {"phaser", "Phaser", "Modulation", C::Effect, sp(kFxPhaser)},
-        {"vib", "Vibrato", "Modulation", C::Effect, sp(kFxVib)},
-        {"trem", "Tremolo", "Modulation", C::Effect, sp(kFxTrem)},
-        {"autopan", "Auto Pan", "Modulation", C::Effect, sp(kFxAutopan)},
+        {"delay", "Delay", "Time", C::Effect, sp(kFxDelayExt)},
+        {"pingpong", "Ping Pong", "Time", C::Effect, sp(kFxPingpongExt)},
+        {"reverb", "Reverb", "Time", C::Effect, sp(kFxReverbExt)},
+        {"plate", "Plate", "Time", C::Effect, sp(kFxPlateExt)},
+        {"chorus", "Chorus", "Modulation", C::Effect, sp(kFxChorusExt)},
+        {"phaser", "Phaser", "Modulation", C::Effect, sp(kFxPhaserExt)},
+        {"vib", "Vibrato", "Modulation", C::Effect, sp(kFxVibExt)},
+        {"trem", "Tremolo", "Modulation", C::Effect, sp(kFxTremExt)},
+        {"autopan", "Auto Pan", "Modulation", C::Effect, sp(kFxAutopanExt)},
         {"dist", "Distortion", "Colour", C::Effect, sp(kFxDist)},
         {"crush", "Bit Crusher", "Colour", C::Effect, sp(kFxCrush)},
         {"cheby", "Chebyshev", "Colour", C::Effect, sp(kFxCheby)},
@@ -91,6 +91,7 @@ DDAW_NAMES(kOff, "Off", "On");
 DDAW_NAMES(kSlope3, "12 dB", "24 dB", "48 dB");
 DDAW_NAMES(kSlope2, "12 dB", "24 dB");
 DDAW_NAMES(kLfoShapes, "Sine", "Triangle", "Saw", "Square");
+DDAW_NAMES(kLfoShapes7, "Sine", "Triangle", "Saw up", "Saw down", "Square", "S&H", "Random");
 DDAW_NAMES(kPolyWave, "Saw", "Square", "Triangle", "Sine", "Fat saw", "Fat sq", "Fat tri");
 DDAW_NAMES(kMonoWave, "Saw", "Square", "Triangle", "Sine");
 DDAW_NAMES(kSubWave, "Saw", "Pulse", "Triangle", "Sine");
@@ -149,6 +150,7 @@ const std::vector<NameSet>& nameSets() {
         };
         for (const char* k : {"i1", "i2", "i3", "i4", "i5", "i6"}) r.push_back(ns("chordres", k, kInterval));
         for (const char* t : {"chorus", "phaser", "autofilt", "trem", "autopan", "vib"}) {
+            r.push_back(ns(t, "shape", kLfoShapes7));
             r.push_back(ns(t, "rateMode", kRateMode));
             r.push_back(ns(t, "rateSync", kRateSync));
         }
@@ -224,6 +226,27 @@ std::string formatParam(const ParamSpec& s, double v) {
         if (i >= 0 && i < int(s.nNames)) return s.names[i];
     }
     char buf[32];
+    // attack, release and hold times are stored in seconds and shown in milliseconds (a real parameter has a positive minimum: a plugin's
+    // normalised 0..1 value that happens to be called "attack" is left alone)
+    if (s.key && s.min > 0.0f && s.max <= 5.0f && s.curve != Curve::Stepped) {
+        std::string k = s.key;
+        std::transform(k.begin(), k.end(), k.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        const auto ends = [&](const char* suffix) { const std::string x = suffix; return k.size() >= x.size() && k.compare(k.size() - x.size(), x.size(), x) == 0; };
+        if (ends("attack") || ends("release") || k == "hold") {
+            const double ms = v * 1000.0;
+            std::snprintf(buf, sizeof buf, ms < 10.0 ? "%.1f ms" : "%.0f ms", ms);
+            return buf;
+        }
+    }
+    // depth is shown as 0-100 whatever its range (a vibrato's 0..0.6 included); a phase is shown in degrees
+    if (s.key && std::string(s.key) == "depth" && s.max > s.min) {
+        std::snprintf(buf, sizeof buf, "%d", int(std::lround((v - s.min) / (double(s.max) - s.min) * 100.0)));
+        return buf;
+    }
+    if (s.key && s.max == 360.0f && s.min == 0.0f && std::string(s.key).find("hase") != std::string::npos) {
+        std::snprintf(buf, sizeof buf, "%d\xC2\xB0", int(std::lround(v)));
+        return buf;
+    }
     const double span = std::fabs(double(s.max) - double(s.min));
     if (s.curve == Curve::Stepped || (span >= 12 && std::fabs(v - std::round(v)) < 1e-9)) std::snprintf(buf, sizeof buf, "%d", int(std::lround(v)));
     else if (std::fabs(v) >= 1000) std::snprintf(buf, sizeof buf, "%.0f", v);

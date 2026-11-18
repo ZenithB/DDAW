@@ -12,6 +12,7 @@
 #include "app/ui/ChordResonatorView.h"
 #include "app/ui/ClipEditor.h"
 #include "app/ui/DeviceChainView.h"
+#include "app/ui/FxView.h"
 #include "app/ui/MainComponent.h"
 #include "app/ui/MixerView.h"
 #include "app/ui/SessionView.h"
@@ -869,7 +870,7 @@ TEST_CASE("modulation panel: LFOs, macros and automation lanes are edited from t
 
     std::vector<ui::Knob*> knobs;
     findAll(panel, knobs);
-    REQUIRE(knobs.size() == 2);                                   // the LFO's depth and the macro's value
+    REQUIRE(knobs.size() == 3);                                   // the LFO's depth and phase, and the macro's value
     {
         Mouse m(*knobs[0]);                                       // drag the LFO depth knob up: a live edit, one undo step
         m.down(pt(25, 40)).drag(pt(25, 10)).drag(pt(25, -30)).up(pt(25, -30));
@@ -878,7 +879,7 @@ TEST_CASE("modulation panel: LFOs, macros and automation lanes are edited from t
     r.m->undo();
     CHECK(r.m->project().tracks[2].lfos[0].depth == Approx(0.3));
     {
-        Mouse m(*knobs[1]);
+        Mouse m(*knobs[2]);
         m.down(pt(25, 40)).drag(pt(25, 10)).drag(pt(25, -30)).up(pt(25, -30));
     }
     CHECK(r.m->project().tracks[2].macros[0].value > 0.4);
@@ -1737,4 +1738,500 @@ TEST_CASE("chord resonator panel: in the device chain it is one wide panel witho
     r.m->apply(document::cmd::setParam(edit::findTrack(r.m->project(), track)->fx.back().uid, "i1", 9));
     v.refresh(app::ModelEvent::Document);
     CHECK(views[0]->value("i1") == 9.0);
+}
+
+// ---- the effect pictures (ARCH 27) ----
+
+namespace {
+struct FxRig {
+    Rig r;
+    project::Uid uid = 0;
+    const app::DeviceInfo* info = nullptr;
+    std::unique_ptr<ui::FxView> v;
+    explicit FxRig(const std::string& type, int availH = 260) {
+        r.demo();
+        const auto track = r.m->project().tracks[1].uid;
+        r.m->apply(edit::addDevice(r.m->project(), track, "fx", type));
+        uid = edit::findTrack(r.m->project(), track)->fx.back().uid;
+        info = app::findDevice(app::Chain::Effect, type);
+        v = ui::FxView::make(*r.m, uid, *info, availH);
+        if (!v) return;
+        v->setSize(v->preferredWidth(), availH - 36);
+        sync();
+    }
+    void sync() { v->sync(*r.m->document().findDevice(uid)); }
+    double param(const char* key) {
+        const auto* d = r.m->document().findDevice(uid);
+        const auto it = d->params.find(key);
+        if (it != d->params.end()) return it->second;
+        for (const auto& p : info->params) if (std::string(p.key) == key) return double(p.def);
+        return -999;
+    }
+    juce::Point<float> logAt(double hz, double db, double lo, double hi) {
+        const auto d = v->displayBounds();
+        return {ddaw::ui::fx::xLog(d, hz), ddaw::ui::fx::yLin(d, db, lo, hi)};
+    }
+};
+}  // namespace
+
+TEST_CASE("effect pictures: every effect has one, every parameter has a control, and it fits its panel", "[ui][fx]") {
+    int checked = 0;
+    for (const auto& d : app::deviceCatalog()) {
+        if (d.chain != app::Chain::Effect || d.type == "chordres") continue;          // the chord resonator has its own view
+        for (int availH : {200, 260, 360}) {
+            INFO(d.type << " at " << availH);
+            FxRig f(d.type, availH);
+            REQUIRE(f.v != nullptr);
+            for (const auto& p : d.params) { INFO(p.key); CHECK(f.v->covers(p.key)); }
+            CHECK(f.v->preferredWidth() >= 280);
+            CHECK(f.v->preferredWidth() <= 1000);
+            const auto bounds = f.v->getLocalBounds();
+            std::vector<juce::Component*> kids;
+            for (auto* c : f.v->getChildren()) if (c->isVisible()) kids.push_back(c);
+            for (auto* c : kids) { INFO("child at " << c->getX() << "," << c->getY() << " " << c->getWidth() << "x" << c->getHeight()); CHECK(bounds.contains(c->getBounds())); }
+            const auto img = f.v->createComponentSnapshot(bounds, true, 1.0f);            // paints without trouble, animated or not
+            CHECK(img.getWidth() == bounds.getWidth());
+            f.v->tick();
+            ++checked;
+        }
+    }
+    CHECK(checked >= 3 * 24);
+}
+
+TEST_CASE("effect pictures: the EQs and the filter are dragged on a frequency plot", "[ui][fx]") {
+    {   // EQ Three: a drag in a band's region sets that band's gain
+        FxRig f("eq");
+        const auto d = f.v->displayBounds();
+        Mouse m(*f.v);
+        const auto from = f.logAt(120, 0, -15, 15), to = f.logAt(120, 6, -15, 15);
+        m.down(from).drag(to).up(to);
+        CHECK(f.param("low") == Approx(6.0).margin(0.6));
+        const auto hi = f.logAt(8000, 0, -15, 15);
+        m.down(hi).drag(f.logAt(8000, -9, -15, 15)).up(f.logAt(8000, -9, -15, 15));
+        CHECK(f.param("high") == Approx(-9.0).margin(0.6));
+        m.dbl(f.logAt(8000, 0, -15, 15));                                              // a double-click flattens the band
+        CHECK(f.param("high") == 0.0);
+        (void)d;
+    }
+    {   // EQ Seven: a node moves in frequency and gain; the wheel is its Q
+        FxRig f("eq7");
+        Mouse m(*f.v);
+        const auto node = f.logAt(f.param("b3_freq"), f.param("b3_gain"), -18, 18);
+        m.down(node).drag(f.logAt(2000, 6, -18, 18)).up(f.logAt(2000, 6, -18, 18));
+        CHECK(f.param("b3_freq") == Approx(2000.0).margin(60.0));
+        CHECK(f.param("b3_gain") == Approx(6.0).margin(0.6));
+        f.sync();
+        const double q0 = f.param("b3_q");
+        juce::MouseWheelDetails w{}; w.deltaY = 1.0f;
+        f.v->mouseWheelMove(m.ev(f.logAt(2000, 6, -18, 18)), w);
+        CHECK(f.param("b3_q") > q0);
+        const double lowGain = f.param("b0_gain");
+        w.deltaY = -1.0f;
+        f.v->mouseWheelMove(m.ev(f.logAt(f.param("b0_freq"), lowGain, -18, 18)), w);     // a shelf has no Q: nothing moves
+        CHECK(f.param("b0_q") == 1.0);
+    }
+    {   // Filter: the node is the cutoff (sideways) and the resonance (up and down)
+        FxRig f("filter");
+        Mouse m(*f.v);
+        const auto node = f.logAt(f.param("freq"), f.param("q"), -54, 18);
+        m.down(node).drag(f.logAt(500, 0, -54, 18)).up(f.logAt(500, 0, -54, 18));
+        CHECK(f.param("freq") == Approx(500.0).margin(25.0));
+        CHECK(f.param("q") < 1.0);
+    }
+}
+
+TEST_CASE("effect pictures: dynamics, time, colour and utility pictures edit their parameters", "[ui][fx]") {
+    {   // Chebyshev: clicking a harmonic's bar sets the order
+        FxRig f("cheby");
+        Mouse m(*f.v);
+        const auto d = f.v->displayBounds().reduced(10, 24).withTrimmedBottom(14);
+        m.click({d.getX() + (6 - 0.5f) / 14.0f * d.getWidth(), d.getCentreY()});
+        CHECK(f.param("order") == 6.0);
+    }
+    {   // Bit Crusher: dragging across the picture sets the bit depth
+        FxRig f("crush");
+        Mouse m(*f.v);
+        const auto d = f.v->displayBounds();
+        m.down({d.getX() + 2.0f, d.getCentreY()}).drag({d.getRight() - 2.0f, d.getCentreY()}).up({d.getRight() - 2.0f, d.getCentreY()});
+        CHECK(f.param("bits") == 16.0);
+        m.down({d.getX() + 2.0f, d.getCentreY()}).up({d.getX() + 2.0f, d.getCentreY()});
+        CHECK(f.param("bits") == 1.0);
+    }
+    {   // Frequency Shifter: drag sideways for Hz, double-click to zero
+        FxRig f("shift");
+        Mouse m(*f.v);
+        const auto c = f.v->displayBounds().getCentre();
+        m.down(c).drag(c.translated(100.0f, 0.0f)).up(c.translated(100.0f, 0.0f));
+        CHECK(f.param("amt") > 100.0);
+        m.dbl(c);
+        CHECK(f.param("amt") == 0.0);
+    }
+    {   // Widener: the distance of the handle from the middle is the width; double-click for unity
+        FxRig f("widen");
+        Mouse m(*f.v);
+        const auto d = f.v->displayBounds();
+        m.down({d.getCentreX() + 5.0f, d.getCentreY()}).drag({d.getCentreX() + 200.0f, d.getCentreY()}).up({d.getCentreX() + 200.0f, d.getCentreY()});
+        CHECK(f.param("width") == 1.0);
+        m.dbl(d.getCentre());
+        CHECK(f.param("width") == 0.5);
+    }
+    {   // a choice is a segmented control or a menu, and picking one sets the parameter
+        FxRig f("autotune");
+        auto* mode = dynamic_cast<ui::Choice*>(f.v->control("mode"));
+        REQUIRE(mode);
+        CHECK(!mode->isMenu());
+        const auto seg = mode->segment(1);
+        Mouse m(*mode);
+        m.click(seg.getCentre().toFloat());
+        CHECK(f.param("mode") == 1.0);
+        auto* root = dynamic_cast<ui::Choice*>(f.v->control("root"));
+        REQUIRE(root);
+        CHECK(root->isMenu());                                                          // thirteen names: a menu
+        CHECK(root->count() == 13);
+    }
+    {   // an LFO effect: dragging the scope sideways is the phase, the knob and the shape choice are there
+        FxRig f("trem");
+        Mouse m(*f.v);
+        const auto d = f.v->displayBounds().reduced(10, 24).withTrimmedBottom(8);
+        const auto start = juce::Point<float>(d.getCentreX(), d.getY() + 4.0f);
+        m.down(start).drag(start.translated(-d.getWidth() / 4.0f, 0.0f)).up(start.translated(-d.getWidth() / 4.0f, 0.0f));
+        CHECK(f.param("phase") == Approx(180.0).margin(2.0));                           // a quarter of the two-cycle plot is half a cycle
+        CHECK(f.v->control("phase") != nullptr);
+        CHECK(f.v->control("shape") != nullptr);
+    }
+}
+
+TEST_CASE("effect pictures: they sit in the device chain in place of a knob grid", "[ui][fx]") {
+    Rig r; r.demo();
+    const auto track = r.m->project().tracks[1].uid;
+    r.m->selectTrack(track);
+    ui::DeviceChainView v(*r.m);
+    v.setSize(2400, 300);
+    v.refresh(app::ModelEvent::Selection);
+    for (const char* t : {"eq7", "comp", "delay", "reverb", "chorus", "dist"}) r.m->apply(edit::addDevice(r.m->project(), track, "fx", t));
+    v.refresh(app::ModelEvent::Document);
+    std::vector<ui::FxView*> views;
+    findAll(v, views);
+    CHECK(views.size() == 7);                                                            // the six, and the demo track's own Filter
+    // the panel's own knobs belong to the instrument and the existing filter only: effect parameters are not knob grids any more
+    std::vector<ui::Knob*> knobs;
+    for (auto* c : v.getChildren()) findAll(*c, knobs);
+    size_t inViews = 0;
+    for (auto* fv : views) { std::vector<ui::Knob*> k; findAll(*fv, k); inViews += k.size(); }
+    CHECK(inViews > 10);
+}
+
+TEST_CASE("parameter display: attack, release and hold in milliseconds, depth as 0-100, phase in degrees", "[appmodel][names]") {
+    auto spec = [](const char* type, const char* key) -> const ParamSpec& {
+        for (const auto& d : app::deviceCatalog()) if (d.type == type) for (const auto& p : d.params) if (std::string(p.key) == key) return p;
+        FAIL("no such parameter " << type << "." << key);
+        static ParamSpec none{}; return none;
+    };
+    using app::formatParam;
+    CHECK(formatParam(spec("comp", "attack"), 0.01) == "10 ms");
+    CHECK(formatParam(spec("comp", "attack"), 0.001) == "1.0 ms");
+    CHECK(formatParam(spec("comp", "release"), 0.2) == "200 ms");
+    CHECK(formatParam(spec("poly", "release"), 1.5) == "1500 ms");
+    CHECK(formatParam(spec("gate", "hold"), 0.05) == "50 ms");
+    CHECK(formatParam(spec("chorus", "depth"), 0.5) == "50");
+    CHECK(formatParam(spec("chorus", "depth"), 1.0) == "100");
+    CHECK(formatParam(spec("vib", "depth"), 0.6) == "100");                              // a vibrato's 0..0.6 still reads 0-100
+    CHECK(formatParam(spec("vib", "depth"), 0.15) == "25");
+    CHECK(formatParam(spec("chorus", "phase"), 90.0) == juce::String(juce::CharPointer_UTF8("90\xC2\xB0")).toStdString());
+}
+
+// ---- the piano roll's tools, snap and note operations (ARCH 28) ----
+
+namespace {
+struct RollRig {
+    Rig r;
+    std::unique_ptr<ui::ClipEditor> v;
+    edit::ClipRef ref;
+    RollRig() {
+        r.demo();
+        ref = {r.m->project().tracks[3].uid, "s3", ""};
+        r.m->selectClip(ref);
+        v = std::make_unique<ui::ClipEditor>(*r.m);
+        v->setSize(1200, 380);
+        v->refresh(app::ModelEvent::Selection);
+        v->scale().originTick = 0; v->scale().pxPerBeat = 64;
+        v->setGridTicks(24.0);                                                           // 1/16 notes: 24 ticks
+        clear();                                                                         // an empty clip; the tests add what they need
+    }
+    const std::vector<project::Note>& notes() const { return edit::findClip(r.m->project(), ref)->notes; }
+    juce::Point<float> at(double tick, int pitch) const { return {float(ui::ClipEditor::kKeysW + v->scale().toX(tick)), float(v->rowTop(pitch) + 5)}; }
+    void clear() { std::vector<project::Uid> ids; for (auto& n : notes()) ids.push_back(n.uid); for (auto id : ids) r.m->apply(edit::removeNote(ref, id)); }
+    const project::Note* find(int pitch, double start) const { for (auto& n : notes()) if (n.pitch == pitch && std::abs(n.startTicks - start) < 0.01) return &n; return nullptr; }
+};
+}  // namespace
+
+TEST_CASE("piano roll tools: the Draw tool adds a note on click, sets its length by dragging, and remembers the length", "[ui][clipeditor][tools]") {
+    RollRig f;
+    f.v->setTool(ui::ClipEditor::Tool::Draw);
+    const size_t n0 = f.notes().size();
+    Mouse m(*f.v);
+    m.click(f.at(24 * 10 + 5, 66));                                                    // click: a note at the snapped start, one grid step long
+    REQUIRE(f.notes().size() == n0 + 1);
+    REQUIRE(f.find(66, 240) != nullptr);
+    CHECK(f.find(66, 240)->durTicks == Approx(24.0));
+    const auto from = f.at(24 * 12 + 3, 68), to = f.at(24 * 12 + 24 * 4 + 3, 68);       // drag right: a longer note
+    m.down(from).drag({from.x + 2, from.y}).drag(to).up(to);
+    REQUIRE(f.find(68, 288) != nullptr);
+    CHECK(f.find(68, 288)->durTicks == Approx(96.0));
+    CHECK(f.v->lastLength() == Approx(96.0));
+    m.click(f.at(24 * 20, 70));                                                        // the next note has the length of the last one
+    CHECK(f.find(70, 480)->durTicks == Approx(96.0));
+    f.r.m->undo();                                                                      // each is one undo step
+    CHECK(f.find(70, 480) == nullptr);
+    CHECK(f.find(68, 288) != nullptr);
+    // a note under the pointer moves like in Select
+    const auto* existing = f.find(68, 288);
+    const auto start = f.at(existing->startTicks + 10, 68);
+    m.down(start).drag({start.x + 4, start.y}).drag({start.x + float(f.v->scale().toX(48) - f.v->scale().toX(0)), start.y}).up({start.x + float(f.v->scale().toX(48) - f.v->scale().toX(0)), start.y});
+    CHECK(f.find(68, 336) != nullptr);
+}
+
+TEST_CASE("piano roll tools: Paint lays a note per grid step along the drag, and clicking a note takes it away", "[ui][clipeditor][tools]") {
+    RollRig f;
+    f.v->setTool(ui::ClipEditor::Tool::Paint);
+    const size_t n0 = f.notes().size();
+    Mouse m(*f.v);
+    const auto a = f.at(24 * 8, 66);
+    m.down(a).drag(f.at(24 * 9 + 2, 66)).drag(f.at(24 * 10 + 2, 67)).drag(f.at(24 * 11 + 2, 68)).up(f.at(24 * 11 + 2, 68));
+    CHECK(f.notes().size() == n0 + 4);
+    CHECK(f.find(66, 192) != nullptr);
+    CHECK(f.find(66, 216) != nullptr);
+    CHECK(f.find(67, 240) != nullptr);                                                 // the pitch follows the row under the pointer
+    CHECK(f.find(68, 264) != nullptr);
+    f.r.m->undo();                                                                      // the whole stroke is one undo step
+    CHECK(f.notes().size() == n0);
+    f.r.m->redo();
+    m.click(f.at(24 * 9 + 4, 66));                                                     // a click on a note deletes it
+    CHECK(f.find(66, 216) == nullptr);
+    CHECK(f.notes().size() == n0 + 3);
+}
+
+TEST_CASE("piano roll tools: Erase deletes along the drag, and the right button erases in the drawing tools", "[ui][clipeditor][tools]") {
+    RollRig f;
+    f.v->setTool(ui::ClipEditor::Tool::Paint);
+    Mouse m(*f.v);
+    m.down(f.at(24 * 8, 66)).drag(f.at(24 * 12, 66)).up(f.at(24 * 12, 66));
+    const size_t n1 = f.notes().size();
+    f.v->setTool(ui::ClipEditor::Tool::Erase);
+    m.down(f.at(24 * 8 + 4, 66)).drag(f.at(24 * 9 + 4, 66)).drag(f.at(24 * 10 + 4, 66)).up(f.at(24 * 10 + 4, 66));
+    CHECK(f.notes().size() == n1 - 3);
+    CHECK(f.find(66, 264) != nullptr);                                                 // the note the stroke did not reach
+    f.v->setTool(ui::ClipEditor::Tool::Draw);
+    Mouse right(*f.v, juce::ModifierKeys(juce::ModifierKeys::rightButtonModifier));
+    right.down(f.at(24 * 11 + 4, 66)).up(f.at(24 * 11 + 4, 66));
+    CHECK(f.find(66, 264) == nullptr);
+    CHECK(f.notes().size() == n1 - 4);
+}
+
+TEST_CASE("piano roll tools: Slice cuts the notes it crosses at the snapped line", "[ui][clipeditor][tools]") {
+    RollRig f;
+    f.r.m->apply(edit::addNote(f.ref, 66, 192.0, 96.0));
+    f.r.m->apply(edit::addNote(f.ref, 72, 192.0, 96.0));
+    const size_t n0 = f.notes().size();
+    f.v->setTool(ui::ClipEditor::Tool::Slice);
+    Mouse m(*f.v);
+    m.click(f.at(192 + 48 + 3, 66));                                                   // a click cuts the note in that row at the line
+    REQUIRE(f.notes().size() == n0 + 1);
+    const auto* a = f.find(66, 192);
+    const auto* b = f.find(66, 240);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    CHECK(a->durTicks == Approx(48.0));
+    CHECK(b->durTicks == Approx(48.0));
+    CHECK(f.find(72, 192)->durTicks == Approx(96.0));                                  // the other row is untouched
+    // a drag across two rows cuts both
+    const auto top = f.at(192 + 72 + 2, 72), bottom = f.at(192 + 72 + 2, 65);
+    m.down(top).drag(bottom).up(bottom);
+    CHECK(f.find(72, 264) != nullptr);
+    f.r.m->undo();
+    CHECK(f.find(72, 264) == nullptr);
+}
+
+TEST_CASE("piano roll tools: the Chord tool stamps a chord, and the shape is chosen from a list", "[ui][clipeditor][tools]") {
+    RollRig f;
+    f.v->setTool(ui::ClipEditor::Tool::Chord);
+    const size_t n0 = f.notes().size();
+    Mouse m(*f.v);
+    m.click(f.at(24 * 10, 60));
+    CHECK(f.notes().size() == n0 + 3);
+    CHECK(f.find(60, 240) != nullptr);
+    CHECK(f.find(64, 240) != nullptr);
+    CHECK(f.find(67, 240) != nullptr);
+    CHECK(f.v->selected().size() == 3);
+    f.v->setChord(4);                                                                   // major seventh
+    m.click(f.at(24 * 14, 60));
+    CHECK(f.notes().size() == n0 + 7);
+    CHECK(f.find(71, 336) != nullptr);
+    f.r.m->undo();
+    CHECK(f.notes().size() == n0 + 3);                                                  // a chord is one undo step
+}
+
+TEST_CASE("piano roll snap: Alt bypasses it, the magnet switches it off, triplets change the step, the key can be snapped to", "[ui][clipeditor][snap]") {
+    RollRig f;
+    f.r.m->apply(edit::addNote(f.ref, 66, 96.0, 48.0));
+    const auto id = f.find(66, 96.0)->uid;
+    auto movedStart = [&](juce::ModifierKeys mods) {
+        Mouse m(*f.v, mods);
+        const auto* n = f.find(66, 96.0);
+        if (!n) for (auto& q : f.notes()) if (q.uid == id) n = &q;
+        const auto from = f.at(n->startTicks + 12, n->pitch);
+        const auto to = juce::Point<float>(from.x + float(f.v->scale().toX(30) - f.v->scale().toX(0)), from.y);
+        m.down(from).drag({from.x + 4, from.y}).drag(to).up(to);
+        for (auto& q : f.notes()) if (q.uid == id) return q.startTicks;
+        return -1.0;
+    };
+    CHECK(movedStart({}) == Approx(120.0));                                              // 96 + 30 snapped to the 24-tick grid
+    f.r.m->undo();
+    CHECK(movedStart(juce::ModifierKeys(juce::ModifierKeys::altModifier)) == Approx(126.0).margin(1.0));   // Alt: exactly where the pointer went
+    f.r.m->undo();
+    f.v->setSnap(false);                                                                 // the magnet is off: free movement...
+    CHECK(movedStart({}) == Approx(126.0).margin(1.0));
+    f.r.m->undo();
+    CHECK(movedStart(juce::ModifierKeys(juce::ModifierKeys::altModifier)) == Approx(120.0));   // ...and Alt turns it on for one gesture
+    f.r.m->undo();
+    f.v->setSnap(true);
+    CHECK(f.v->gridStep() == Approx(24.0));
+    f.v->setTriplet(true);
+    CHECK(f.v->gridStep() == Approx(16.0));
+    f.v->setTriplet(false);
+    // the key: A minor (the demo's) lights its notes, and drawing can snap pitches into it
+    f.v->setScaleHighlight(true);
+    f.v->refresh(app::ModelEvent::Selection);
+    CHECK(f.v->inScale(57));                                                             // A
+    CHECK(f.v->inScale(60));                                                             // C
+    CHECK_FALSE(f.v->inScale(58));                                                       // A#
+    f.v->setScaleSnap(true);
+    f.v->setTool(ui::ClipEditor::Tool::Draw);
+    Mouse m(*f.v);
+    m.click(f.at(24 * 30, 61));                                                          // C#: not in the key, drawn on the nearest note of it
+    bool found = false;
+    for (auto& n : f.notes()) if (std::abs(n.startTicks - 24 * 30) < 0.01 && (n.pitch == 60 || n.pitch == 62)) found = true;
+    CHECK(found);
+}
+
+TEST_CASE("piano roll tools: Cmd-drag copies, Shift holds an axis, the left edge resizes from the start, the right button opens the edit menu", "[ui][clipeditor][tools]") {
+    RollRig f;
+    f.r.m->apply(edit::addNote(f.ref, 66, 192.0, 96.0));
+    const size_t n0 = f.notes().size();
+    const auto id = f.notes().back().uid;
+    const auto rect = f.v->noteRect(f.notes().back());
+    const double beat = f.v->scale().toX(96) - f.v->scale().toX(0);
+    {   // Cmd-drag: a copy lands a beat later, the original stays
+        Mouse m(*f.v, juce::ModifierKeys(juce::ModifierKeys::commandModifier));
+        const auto from = juce::Point<float>(float(rect.getX() + rect.getWidth() / 2), float(rect.getCentreY()));
+        m.down(from).drag({from.x + 4, from.y}).drag({from.x + float(beat), from.y}).up({from.x + float(beat), from.y});
+        CHECK(f.notes().size() == n0 + 1);
+        CHECK(f.find(66, 192) != nullptr);
+        CHECK(f.find(66, 288) != nullptr);
+        f.r.m->undo();
+        CHECK(f.notes().size() == n0);
+    }
+    {   // Shift: a diagonal drag moves only along the axis it is mostly going
+        Mouse m(*f.v, juce::ModifierKeys(juce::ModifierKeys::shiftModifier));
+        const auto from = juce::Point<float>(float(rect.getX() + rect.getWidth() / 2), float(rect.getCentreY()));
+        m.down(from).drag({from.x + 10, from.y + 2}).drag({from.x + float(beat), from.y - float(3 * f.v->rowH())}).up({from.x + float(beat), from.y - float(3 * f.v->rowH())});
+        for (auto& n : f.notes()) if (n.uid == id) { CHECK(n.pitch == 66); CHECK(n.startTicks == Approx(288.0)); }
+        f.r.m->undo();
+    }
+    {   // the left edge: the note starts a beat later and is a beat shorter, the end stays put
+        f.v->selectAll();
+        Mouse m(*f.v);
+        const auto r2 = f.v->noteRect(*std::find_if(f.notes().begin(), f.notes().end(), [&](auto& n) { return n.uid == id; }));
+        const auto from = juce::Point<float>(float(r2.getX() + 1), float(r2.getCentreY()));
+        f.v->selectAll();
+        m.down(from).drag({from.x + 4, from.y}).drag({from.x + float(beat / 2.0), from.y}).up({from.x + float(beat / 2.0), from.y});
+        for (auto& n : f.notes()) if (n.uid == id) { CHECK(n.startTicks == Approx(240.0)); CHECK(n.durTicks == Approx(48.0)); }
+    }
+    {   // the right button on a note selects it (the menu itself is async): nothing is edited
+        f.v->selectAll();
+        Mouse right(*f.v, juce::ModifierKeys(juce::ModifierKeys::rightButtonModifier));
+        const auto r3 = f.v->noteRect(f.notes().back());
+        const size_t before = f.notes().size();
+        right.down(juce::Point<float>(float(r3.getCentreX()), float(r3.getCentreY()))).up(juce::Point<float>(float(r3.getCentreX()), float(r3.getCentreY())));
+        CHECK(f.notes().size() == before);
+        juce::PopupMenu::dismissAllActiveMenus();
+    }
+}
+
+TEST_CASE("piano roll operations: quantize, legato, chop, reverse, transpose, stretch and velocity apply to the selection (or all notes) as one undo step", "[ui][clipeditor][ops]") {
+    RollRig f;
+    f.clear();
+    f.r.m->apply(edit::addNote(f.ref, 60, 10.0, 20.0));
+    f.r.m->apply(edit::addNote(f.ref, 62, 100.0, 20.0));
+    f.r.m->apply(edit::addNote(f.ref, 64, 200.0, 20.0));
+    REQUIRE(f.notes().size() == 3);
+    using Op = ui::ClipEditor::Op;
+    CHECK(f.v->applyOp(Op::Quantize));                                                   // nothing selected: all notes
+    CHECK(f.find(60, 0.0) != nullptr);
+    CHECK(f.find(62, 96.0) != nullptr);
+    CHECK(f.find(64, 192.0) != nullptr);
+    f.r.m->undo();
+    CHECK(f.find(60, 10.0) != nullptr);                                                  // one undo for the whole operation
+    CHECK(f.v->applyOp(Op::Legato));
+    CHECK(f.find(60, 10.0)->durTicks == Approx(90.0));
+    f.r.m->undo();
+    f.v->selectAll();
+    CHECK(f.v->applyOp(Op::OctaveUp));
+    CHECK(f.find(72, 10.0) != nullptr);
+    CHECK(f.v->applyOp(Op::OctaveDown));
+    CHECK(f.v->applyOp(Op::Double));
+    CHECK(f.find(60, 10.0 + 0.0) != nullptr);
+    CHECK(f.find(62, 190.0) != nullptr);                                                 // 10 + (100 - 10) * 2
+    CHECK(f.v->applyOp(Op::Half));
+    CHECK(f.find(62, 100.0) != nullptr);
+    CHECK(f.v->applyOp(Op::FlipTime));
+    CHECK(f.find(64, 10.0) != nullptr);                                                  // the last note is first now
+    CHECK(f.v->applyOp(Op::FlipTime));
+    const size_t before = f.notes().size();
+    CHECK(f.v->applyOp(Op::Chop2));                                                      // each note into two: three more
+    CHECK(f.notes().size() == before + 3);
+    f.r.m->undo();
+    CHECK(f.notes().size() == before);
+    CHECK(f.v->applyOp(Op::VelocityFull));
+    for (auto& n : f.notes()) CHECK(n.velocity == 1.0);
+    CHECK(f.v->applyOp(Op::VelocityDown));
+    for (auto& n : f.notes()) CHECK(n.velocity == Approx(0.85));
+}
+
+TEST_CASE("piano roll: copy, cut and paste, tool shortcuts, and painting velocities across several bars", "[ui][clipeditor][tools]") {
+    RollRig f;
+    f.clear();
+    for (int i = 0; i < 4; ++i) f.r.m->apply(edit::addNote(f.ref, 60 + i, 96.0 * i, 48.0, 0.5));
+    f.v->selectAll();
+    CHECK(f.v->keyPressed(juce::KeyPress('c', juce::ModifierKeys::commandModifier, 0)));
+    CHECK(ui::ClipEditor::hasClipboard());
+    f.v->scale().originTick = 384.0;                                                     // paste at the left edge of the view (snapped)
+    CHECK(f.v->keyPressed(juce::KeyPress('v', juce::ModifierKeys::commandModifier, 0)));
+    CHECK(f.notes().size() == 8);
+    CHECK(f.find(60, 384.0) != nullptr);
+    CHECK(f.find(63, 384.0 + 288.0) != nullptr);
+    CHECK(f.v->selected().size() == 4);
+    CHECK(f.v->keyPressed(juce::KeyPress('x', juce::ModifierKeys::commandModifier, 0)));  // cut the pasted ones
+    CHECK(f.notes().size() == 4);
+    f.r.m->undo();
+    CHECK(f.notes().size() == 8);
+    // keys pick the tools
+    CHECK(f.v->keyPressed(juce::KeyPress('b', 0, 'b')));
+    CHECK(f.v->tool() == ui::ClipEditor::Tool::Draw);
+    CHECK(f.v->keyPressed(juce::KeyPress('d', 0, 'd')));
+    CHECK(f.v->tool() == ui::ClipEditor::Tool::Erase);
+    CHECK(f.v->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)));
+    CHECK(f.v->tool() == ui::ClipEditor::Tool::Select);
+    // the velocity lane: one drag across the bars sets them all along the stroke
+    f.v->scale().originTick = 0;
+    const auto g = f.v->gridRect();
+    Mouse m(*f.v);
+    const int x0 = ui::ClipEditor::kKeysW + int(f.v->scale().toX(0)) + 1, x1 = ui::ClipEditor::kKeysW + int(f.v->scale().toX(96.0 * 3)) + 1;
+    m.down(pt(x0, g.getBottom() + 50)).drag(pt((x0 + x1) / 2, g.getBottom() + 30)).drag(pt(x1, g.getBottom() + 10)).up(pt(x1, g.getBottom() + 10));
+    std::vector<double> vs;
+    for (int i = 0; i < 4; ++i) vs.push_back(f.find(60 + i, 96.0 * i)->velocity);
+    CHECK(vs[0] < vs[1]);
+    CHECK(vs[1] < vs[2]);
+    CHECK(vs[2] < vs[3]);                                                                 // a ramp up along the stroke
+    CHECK(vs[3] > 0.8);
 }

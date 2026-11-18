@@ -26,7 +26,7 @@ TEST_CASE("catalog: every device has a schema and a readable label", "[appmodel]
     const auto& c = deviceCatalog();
     CHECK(c.size() >= 38);
     CHECK(findDevice(Chain::Effect, "reverb"));
-    CHECK(findDevice(Chain::Instrument, "poly")->params.size() == 12);
+    CHECK(findDevice(Chain::Instrument, "poly")->params.size() == 13);
     CHECK_FALSE(findDevice(Chain::Effect, "poly"));
     CHECK(paramLabel("lfoShape") == "LFO Shape");
     CHECK(paramLabel("vibAmt") == "Vib Amt");

@@ -15,6 +15,7 @@
 
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
+#include "devices/schema/SchemaExt.h"
 #include "dsp/Lfo.h"
 #include "dsp/Smoother.h"
 
@@ -23,7 +24,7 @@ namespace {
 
 using namespace ddaw::dsp;
 
-enum P : uint16_t { Rate, Octaves, Mix, RateMode, RateSync, RateHi };
+enum P : uint16_t { Rate, Octaves, Mix, RateMode, RateSync, RateHi , Phase, Shape };
 
 constexpr float kBaseFreq = 350.0f;
 constexpr int kStages = 10;
@@ -75,7 +76,7 @@ public:
         applyRate();
     }
 
-    std::span<const ParamSpec> params() const override { return schema::kFxPhaser; }
+    std::span<const ParamSpec> params() const override { return schema::kFxPhaserExt; }
 
     void prepare(double sr, int) override {
         sr_ = static_cast<float>(std::max(sr, 1.0));
@@ -99,6 +100,8 @@ public:
                 break;
             }
             case Mix: mix_.setTarget(std::clamp(v, 0.0f, 1.0f)); break;
+            case Phase: phaseCyc_ = std::clamp(v, 0.0f, 360.0f) / 360.0f; applyPhase(); break;
+            case Shape: applyShape(static_cast<uint32_t>(std::clamp(static_cast<int>(v), 0, 6))); break;
             default: break;
         }
     }
@@ -148,6 +151,9 @@ private:
 
     float sr_ = 44100.0f;
     float span_ = kBaseFreq * (8.0f - 1.0f);   // default octaves 3
+    void applyPhase() { lfo_.setPhaseOffset(phaseCyc_); }
+    void applyShape(uint32_t sh) { lfo_.setShape(sh); }
+    float phaseCyc_ = 0.0f;
     Lfo lfo_;
     Smoother mix_;
     std::array<Allpass, kStages> stagesL_, stagesR_;

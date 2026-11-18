@@ -11,6 +11,7 @@
 #include "core/Device.h"
 #include "devices/schema/Schema.generated.h"
 #include "dsp/Adsr.h"
+#include "devices/schema/SchemaExt.h"
 #include "dsp/Lfo.h"
 #include "dsp/Math.h"
 #include "dsp/PolyBlepOsc.h"
@@ -23,7 +24,7 @@ namespace {
 using namespace ddaw::dsp;
 
 // Index in schema::kInstMono.
-enum P : uint16_t { Wave_, Cutoff, Res, Slope, EnvAmt, Glide, Attack, Decay, Sustain, Release, LfoShape, LfoRate, LfoAmt };
+enum P : uint16_t { Wave_, Cutoff, Res, Slope, EnvAmt, Glide, Attack, Decay, Sustain, Release, LfoShape, LfoRate, LfoAmt, LfoPhase };
 
 constexpr std::array<int, 3> kSlopeStages = {1, 2, 4};  // Tone SLOPE_ROLLOFFS = [-12, -24, -48]
 constexpr int kMaxStages = 4;
@@ -37,7 +38,7 @@ public:
         syncAmpEnv();
     }
 
-    std::span<const ParamSpec> params() const override { return schema::kInstMono; }
+    std::span<const ParamSpec> params() const override { return schema::kInstMonoExt; }
 
     void prepare(double sr, int) override {
         sr_ = static_cast<float>(std::max(sr, 1.0));
@@ -69,6 +70,7 @@ public:
             case LfoShape: lfo_.setShape(kLfoShapeMap[static_cast<size_t>(std::clamp(static_cast<int>(v), 0, 3))]); break;
             case LfoRate: lfo_.setFreq(v); break;
             case LfoAmt: lfoAmt_ = std::clamp(v, 0.0f, 1.0f); break;
+            case LfoPhase: lfo_.setPhaseOffset(std::clamp(v, 0.0f, 360.0f) / 360.0f); break;
             default: break;
         }
     }

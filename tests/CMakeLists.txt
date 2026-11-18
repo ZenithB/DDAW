@@ -17,6 +17,7 @@ add_executable(ddaw_tests
     test_project_json.cpp
     document_test.cpp
     app/appmodel_test.cpp
+    app/noteops_test.cpp
     app/controllers_test.cpp)
 # One test file per device: tests/devices/<type>_test.cpp. Picked up automatically, so a device task
 # never edits this file.
