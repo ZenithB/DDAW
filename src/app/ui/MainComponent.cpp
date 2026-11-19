@@ -46,6 +46,7 @@ void MainComponent::timerCallback() {
     if (mainTab_ == MainTab::Arrangement) arrangement_.tick();
     if (mainTab_ == MainTab::Routing) routing_.tick();
     if (detailTab_ == DetailTab::Clip) clip_.tick();
+    if (detailTab_ == DetailTab::Devices) devices_.tick();   // effect in/out meters, gain reduction and the live pictures
     if (detailTab_ == DetailTab::Input) input_.tick();
     if (detailTab_ == DetailTab::Modulation) mod_.tick();
     model_.tick();

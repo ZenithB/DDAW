@@ -2153,6 +2153,29 @@ TEST_CASE("effect panels: every effect has an input and an output trim with a me
     CHECK(out->value() == before);
 }
 
+TEST_CASE("effect meters: the window's own timer drives the in/out and gain-reduction meters", "[ui][fxtrim][main]") {
+    Rig r; r.demo();
+    auto& bank = const_cast<engine::MeterBank&>(r.eng.meters());
+    const auto track = r.m->project().tracks[1].uid;
+    r.m->selectTrack(track);
+    r.m->apply(edit::addDevice(r.m->project(), track, "fx", "comp"));
+    const size_t slot = r.m->project().tracks[1].fx.size() - 1;
+    ui::MainComponent main(*r.m);
+    main.setSize(1440, 900);
+    main.resized();
+    main.showDetail(ui::MainComponent::DetailTab::Devices);
+    main.tick();
+    std::vector<ui::TrimStrip*> strips;
+    findAll(main, strips);
+    REQUIRE(strips.size() >= 2 * (slot + 1));
+    bank.setFxIo(1, int(slot), 0.5f, 0.25f, 1.0f);
+    bank.setFxGr(1, int(slot), 0, -6.0f);
+    main.tick();                                                                // the timer alone, no direct call into the pane
+    CHECK(strips[2 * slot]->level() == Approx(0.5f));
+    CHECK(strips[2 * slot + 1]->level() == Approx(0.25f));
+    CHECK(r.m->reductionDb(r.m->project().tracks[1].fx.back().uid) == Approx(-6.0f));
+}
+
 TEST_CASE("effect trims: the document keeps them (in and out), saves them and restores them", "[document][fxtrim]") {
     Rig r; r.demo();
     const auto track = r.m->project().tracks[1].uid;
